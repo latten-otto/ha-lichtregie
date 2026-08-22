@@ -17,8 +17,10 @@ from lichtregie.core.naming import (  # noqa: E402
     KIND_DEFAULTS,
     guess_kind,
     guess_role,
+    is_button_trigger,
     is_group,
     is_room_lighting,
+    zone_from_name,
 )
 
 GENERAL, TASK, AMBIENT, ACCENT, NIGHT = (
@@ -146,6 +148,89 @@ def test_echte_leuchte_ist_keine_gruppe():
 def test_leere_mitgliederliste_ist_keine_gruppe():
     """Ein leeres Attribut zählt nicht — sonst fielen echte Leuchten heraus."""
     assert is_group(Zustand(entity_id=[]), None) is False
+
+
+# --- Tasterauslöser --------------------------------------------------------
+#
+# Alle Typen unten stammen aus dem Geräteregister der echten Anlage.
+
+
+def trg(kind: str) -> bool:
+    return is_button_trigger({"type": kind})
+
+
+def test_busch_jaeger_wandsender():
+    """Neun Sender, je 24 Auslöser — die müssen erkannt werden."""
+    assert trg("remote_button_short_release")
+    assert trg("remote_button_long_press")
+    assert trg("remote_button_long_release")
+
+
+def test_shelly_eingaenge():
+    for kind in ("single_push", "double_push", "triple_push", "long_push"):
+        assert trg(kind), kind
+
+
+def test_bthome_taste():
+    """Die Shelly-BLU-Melder und Klimasensoren haben eine echte Taste."""
+    assert trg("button")
+
+
+def test_druck_ist_keine_taste():
+    """Der Grund für die Positivliste: „pressure" enthält „press"."""
+    assert not trg("pressure")
+
+
+def test_geraetetaste_von_sonos_und_miele_zaehlt_nicht():
+    """Sonos und Miele melden „pressed" für ihre Gerätetaste.
+
+    Technisch ein Taster, als Lichtschalter unsinnig — sonst stünden acht
+    Lautsprecher und die Waschmaschine in der Liste der Bedienelemente.
+    """
+    assert not trg("pressed")
+
+
+def test_zustandsmeldungen_sind_keine_tasten():
+    for kind in (
+        "changed_states", "turned_on", "turned_off", "playing", "paused",
+        "idle", "buffering", "battery_level", "enters", "leaves",
+        "motion", "no_motion", "illuminance", "temperature", "humidity",
+        "opened", "failure", "autocleaning",
+    ):
+        assert not trg(kind), kind
+
+
+def test_leerer_auslöser():
+    assert not is_button_trigger({})
+    assert not is_button_trigger({"type": None})
+
+
+# --- Zone aus dem Namen ----------------------------------------------------
+
+ZONEN = {
+    "z1": "Flur unten",
+    "z2": "Bad unten",
+    "z3": "Bad oben",
+    "z4": "Wohnzimmer",
+    "z5": "Büro",
+}
+
+
+def test_zone_aus_dem_geraetenamen():
+    """Zwei deiner Wandsender haben keinen Bereich zugewiesen."""
+    assert zone_from_name("Wandsender Flur unten", ZONEN) == "z1"
+    assert zone_from_name("Wandsender Büro", ZONEN) == "z5"
+
+
+def test_laengster_treffer_gewinnt():
+    """Sonst würde „Bad unten" im Zweifel im Bad oben landen."""
+    assert zone_from_name("Wandsender Bad unten", ZONEN) == "z2"
+    assert zone_from_name("Wandsender Bad oben", ZONEN) == "z3"
+
+
+def test_ohne_treffer_keine_zone():
+    assert zone_from_name("Wandsender Bett Christian", ZONEN) is None
+    assert zone_from_name("", ZONEN) is None
 
 
 # --- Raumtypen -------------------------------------------------------------

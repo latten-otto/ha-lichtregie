@@ -27,8 +27,10 @@ from ..core.naming import (
     KIND_DEFAULTS,
     guess_kind,
     guess_role,
+    is_button_trigger,
     is_group,
     is_room_lighting,
+    zone_from_name,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -112,7 +114,6 @@ async def rate_lux_sensor(hass: HomeAssistant, entity_id: str) -> tuple[str, dic
 # Bedienelemente
 # --------------------------------------------------------------------------
 
-_BUTTON_TRIGGER = re.compile(r"remote_button|button|press|push", re.I)
 _DECONZ_GROUP_MODEL = "deconz group"
 
 
@@ -138,6 +139,8 @@ async def discover_controls(hass: HomeAssistant) -> list[ControlPoint]:
     """Findet alle Taster, Wandsender und Eingänge — herstellerunabhängig."""
     devices = dr.async_get(hass)
     entities = er.async_get(hass)
+    areas = ar.async_get(hass)
+    zone_names = {a.id: a.name for a in areas.async_list_areas()}
     out: list[ControlPoint] = []
 
     # Namen der deCONZ-Gruppen merken, um Direktbindungen zu erkennen.
@@ -181,13 +184,14 @@ async def discover_controls(hass: HomeAssistant) -> list[ControlPoint]:
         )
 
     for device_id, triggers in found.items():
-        button_triggers = [
-            t for t in triggers if _BUTTON_TRIGGER.search(str(t.get("type", "")))
-        ]
+        button_triggers = [t for t in triggers if is_button_trigger(t)]
         if not button_triggers:
             continue
         device = devices.async_get(device_id)
         if device is None:
+            continue
+        # Zigbee-Gruppen stehen als Gerät im Register, sind aber kein Taster.
+        if is_group(None, device):
             continue
         name = device.name_by_user or device.name or device_id
         model = device.model or ""
@@ -204,7 +208,7 @@ async def discover_controls(hass: HomeAssistant) -> list[ControlPoint]:
                 device_id=device_id,
                 model=f"{device.manufacturer or ''} {model}".strip(),
                 buttons=max(1, buttons),
-                zone_id=device.area_id,
+                zone_id=device.area_id or zone_from_name(name, zone_names),
                 direct_bound=bool(bound),
                 direct_groups=bound,
             )
@@ -216,18 +220,19 @@ async def discover_controls(hass: HomeAssistant) -> list[ControlPoint]:
             continue
         state = hass.states.get(entry.entity_id)
         types = list((state.attributes.get("event_types") if state else []) or [])
-        # Nur Bedienereignisse, keine Klingel-, Kamera- oder Backupereignisse.
-        if not any(_BUTTON_TRIGGER.search(t) for t in types):
+        # Nur Bedienereignisse — nicht Klingel, Kamera oder Sicherung.
+        if not any(is_button_trigger({"type": t}) for t in types):
             continue
+        name = state.name if state else entry.entity_id
         out.append(
             ControlPoint(
                 id=f"ev_{entry.entity_id.split('.', 1)[1][:24]}",
-                name=state.name if state else entry.entity_id,
+                name=name,
                 source="event_entity",
                 entity_id=entry.entity_id,
                 model="Ereignis-Entität",
                 buttons=1,
-                zone_id=_area_of(entry, devices),
+                zone_id=_area_of(entry, devices) or zone_from_name(name, zone_names),
             )
         )
 
@@ -248,7 +253,8 @@ async def discover_controls(hass: HomeAssistant) -> list[ControlPoint]:
                 entity_id=entry.entity_id,
                 model="Kontakteingang",
                 buttons=1,
-                zone_id=_area_of(entry, devices),
+                zone_id=_area_of(entry, devices)
+                or zone_from_name(entry.name or entry.original_name or "", zone_names),
             )
         )
 

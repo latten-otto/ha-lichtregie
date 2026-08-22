@@ -178,3 +178,59 @@ def guess_kind(area_name: str) -> str:
         if any(word in lowered for word in words):
             return kind
     return "wohnraum"
+
+
+# --------------------------------------------------------------------------
+# Bedienelemente erkennen
+# --------------------------------------------------------------------------
+
+# Auslösertypen, die wirklich von einem Taster kommen. Bewusst als
+# Positivliste, nicht als Suchmuster: eine Suche nach „press" trifft auch
+# „pressure" (jeder Umweltsensor), und eine Suche nach „button" trifft
+# Geräte, deren Knopf nichts mit Beleuchtung zu tun hat.
+#
+# Nicht enthalten ist der Typ „pressed" allein. Den melden Sonos-Lautsprecher
+# und Miele-Hausgeräte für ihre Gerätetaste — technisch ein Taster, als
+# Lichtschalter aber unsinnig.
+_BUTTON_SUFFIXES: tuple[str, ...] = ("_push", "_click")
+_BUTTON_TYPES: frozenset[str] = frozenset(
+    {
+        "button",
+        "single_press",
+        "double_press",
+        "triple_press",
+        "long_press",
+        "hold_press",
+        "short_press",
+        "click",
+    }
+)
+
+
+def is_button_trigger(trigger: dict[str, Any]) -> bool:
+    """Wahr, wenn dieser Geräteauslöser von einem Taster stammt."""
+    kind = str(trigger.get("type") or "")
+    if kind.startswith("remote_button"):
+        return True
+    if kind in _BUTTON_TYPES:
+        return True
+    return kind.endswith(_BUTTON_SUFFIXES)
+
+
+def zone_from_name(name: str, zones: dict[str, str]) -> str | None:
+    """Ordnet ein Bedienelement über seinen Namen einer Zone zu.
+
+    Letzter Rückgriff, wenn dem Gerät kein Bereich zugewiesen ist: ein
+    „Wandsender Flur" gehört offensichtlich in den Flur. Der längste
+    passende Zonenname gewinnt, damit „Bad unten" vor „Bad oben" greift.
+    """
+    lowered = name.lower()
+    treffer = [
+        (zone_name, zone_id)
+        for zone_id, zone_name in zones.items()
+        if zone_name.lower() in lowered
+    ]
+    if not treffer:
+        return None
+    treffer.sort(key=lambda x: len(x[0]), reverse=True)
+    return treffer[0][1]

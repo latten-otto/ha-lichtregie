@@ -131,6 +131,7 @@ async def ws_set_control(hass, connection, msg) -> None:
     {
         vol.Required("type"): "lichtregie/discover",
         vol.Optional("merge", default=True): bool,
+        vol.Optional("replace_controls", default=False): bool,
     }
 )
 @websocket_api.require_admin
@@ -149,8 +150,24 @@ async def ws_discover(hass, connection, msg) -> None:
         known_controls = {c.id for c in store.installation.controls}
         added_zones = [z for z in found.zones if z.id not in known_zones]
         added_controls = [c for c in found.controls if c.id not in known_controls]
+
+        if msg.get("replace_controls"):
+            # Bedienelemente vollständig erneuern, aber vorhandene
+            # Tastenbelegungen behalten — die sind Handarbeit.
+            belegungen = {
+                c.id: c.bindings
+                for c in store.installation.controls
+                if c.bindings
+            }
+            for control in found.controls:
+                if control.id in belegungen:
+                    control.bindings = belegungen[control.id]
+            store.installation.controls = found.controls
+            added_controls = found.controls
+        else:
+            store.installation.controls.extend(added_controls)
+
         store.installation.zones.extend(added_zones)
-        store.installation.controls.extend(added_controls)
         if added_zones or added_controls:
             await store.save(label="Anlage eingelesen")
             _engine(hass).rebuild()
