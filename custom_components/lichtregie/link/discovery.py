@@ -116,11 +116,28 @@ _BUTTON_TRIGGER = re.compile(r"remote_button|button|press|push", re.I)
 _DECONZ_GROUP_MODEL = "deconz group"
 
 
+def _area_of(entry, devices) -> str | None:
+    """Bereich einer Entität — eigener Eintrag, sonst der ihres Geräts.
+
+    Die meisten Entitäten haben keinen eigenen Bereich, sondern erben ihn
+    vom Gerät. Ohne diesen Rückgriff bleibt fast jedes Bedienelement ohne
+    Zone und tut damit nichts.
+    """
+    if entry is None:
+        return None
+    if entry.area_id:
+        return entry.area_id
+    if entry.device_id:
+        device = devices.async_get(entry.device_id)
+        if device is not None:
+            return device.area_id
+    return None
+
+
 async def discover_controls(hass: HomeAssistant) -> list[ControlPoint]:
     """Findet alle Taster, Wandsender und Eingänge — herstellerunabhängig."""
     devices = dr.async_get(hass)
     entities = er.async_get(hass)
-    areas = ar.async_get(hass)
     out: list[ControlPoint] = []
 
     # Namen der deCONZ-Gruppen merken, um Direktbindungen zu erkennen.
@@ -131,20 +148,37 @@ async def discover_controls(hass: HomeAssistant) -> list[ControlPoint]:
     ]
 
     # 1) Geräte mit Tastenauslösern (deCONZ, ZHA, Hue …)
+    #
+    # Der Abruf läuft blockweise: ein einziger Aufruf über alle Geräte
+    # liefert bei einer gewachsenen Anlage nichts, wenn eine einzelne
+    # Integration dabei stolpert. So fällt höchstens ein Block aus.
+    found: dict[str, list[dict[str, Any]]] = {}
+    device_ids = [d.id for d in devices.devices.values()]
     try:
         from homeassistant.components.device_automation import (
-            async_get_device_automations,
             DeviceAutomationType,
+            async_get_device_automations,
         )
-
-        found = await async_get_device_automations(
-            hass,
-            DeviceAutomationType.TRIGGER,
-            [d.id for d in devices.devices.values()],
+    except ImportError as err:
+        _LOGGER.warning("Geräteauslöser nicht verfügbar: %s", err)
+    else:
+        for start in range(0, len(device_ids), 20):
+            block = device_ids[start : start + 20]
+            try:
+                found.update(
+                    await async_get_device_automations(
+                        hass, DeviceAutomationType.TRIGGER, block
+                    )
+                )
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.warning(
+                    "Geräteauslöser für %s Geräte nicht lesbar: %s", len(block), err
+                )
+        _LOGGER.info(
+            "Geräteauslöser: %s von %s Geräten melden Auslöser",
+            len(found),
+            len(device_ids),
         )
-    except Exception as err:  # noqa: BLE001
-        _LOGGER.debug("Geräteauslöser nicht lesbar: %s", err)
-        found = {}
 
     for device_id, triggers in found.items():
         button_triggers = [
@@ -170,11 +204,7 @@ async def discover_controls(hass: HomeAssistant) -> list[ControlPoint]:
                 device_id=device_id,
                 model=f"{device.manufacturer or ''} {model}".strip(),
                 buttons=max(1, buttons),
-                zone_id=(
-                    areas.async_get_area(device.area_id).id
-                    if device.area_id and areas.async_get_area(device.area_id)
-                    else None
-                ),
+                zone_id=device.area_id,
                 direct_bound=bool(bound),
                 direct_groups=bound,
             )
@@ -197,7 +227,7 @@ async def discover_controls(hass: HomeAssistant) -> list[ControlPoint]:
                 entity_id=entry.entity_id,
                 model="Ereignis-Entität",
                 buttons=1,
-                zone_id=entry.area_id,
+                zone_id=_area_of(entry, devices),
             )
         )
 
@@ -218,7 +248,7 @@ async def discover_controls(hass: HomeAssistant) -> list[ControlPoint]:
                 entity_id=entry.entity_id,
                 model="Kontakteingang",
                 buttons=1,
-                zone_id=entry.area_id,
+                zone_id=_area_of(entry, devices),
             )
         )
 
