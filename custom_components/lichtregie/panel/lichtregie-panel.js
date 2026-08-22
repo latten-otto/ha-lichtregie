@@ -130,7 +130,34 @@ select:focus,input:focus{outline:1px solid var(--amber);outline-offset:1px}
 .toggle.on i{background:#4A3B22}
 .toggle.on i::after{left:16px;background:var(--amber)}
 .curvebox{border:1px solid var(--line);border-radius:9px;background:var(--panel);padding:12px}
+.lamp{display:grid;grid-template-columns:minmax(190px,2fr) 128px 96px 104px 104px 92px;gap:8px;
+  align-items:center;padding:9px 11px;border-radius:7px;border:1px solid var(--line);
+  background:var(--panel);margin-bottom:5px}
+.lamp.head{background:#12141A;border-color:#12141A;font-size:10px;text-transform:uppercase;
+  letter-spacing:.1em;color:var(--faint);padding:7px 11px}
+.lamp.off{opacity:.5}
+.lamp .lname{font-size:13px;font-weight:600}
+.lamp .lent{font-family:ui-monospace,monospace;font-size:10.5px;color:var(--faint)}
+.lamp .num{display:flex;align-items:center;gap:5px}
+.lamp .num input{width:56px;text-align:right}
+.lamp .unit{font-family:ui-monospace,monospace;font-size:11px;color:var(--faint)}
+.lamp .kann{font-size:11px;color:var(--faint)}
+.zonebar{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:6px}
+.rule{display:grid;grid-template-columns:minmax(150px,1.2fr) minmax(140px,1fr) 120px 130px 30px;
+  gap:8px;align-items:center;padding:8px 11px;border-radius:7px;border:1px solid var(--line);
+  background:var(--panel);margin-bottom:5px}
+.rule.head{background:#12141A;border-color:#12141A;font-size:10px;text-transform:uppercase;
+  letter-spacing:.1em;color:var(--faint)}
+.rule .src{font-size:12.5px}
+.rule .ent{font-family:ui-monospace,monospace;font-size:10.5px;color:var(--faint)}
+.hint{font-size:12px;color:var(--faint);margin:6px 0 0;line-height:1.5}
+@media(max-width:980px){
+  .lamp{grid-template-columns:minmax(150px,1.4fr) 120px 92px 96px;}
+  .lamp > :nth-child(n+5){display:none}
+}
 @media(max-width:700px){
+  .lamp{grid-template-columns:1fr 1fr}
+  .rule{grid-template-columns:1fr 1fr}
   .bind{grid-template-columns:1fr 1fr;}
   .bind.head{display:none}
   .body{grid-template-columns:1fr}
@@ -286,8 +313,10 @@ class LichtregiePanel extends HTMLElement {
         <nav>
           <div class="grp">Betrieb</div>
           ${this._navButton("leitstand", "Leitstand")}
-          ${this._navButton("zone", "Zone")}
-          ${this._navButton("bedienung", "Bedienelemente")}
+          <div class="grp">Einrichtung</div>
+          ${this._navButton("lampen", "Lampen")}
+          ${this._navButton("szenen", "Szenen")}
+          ${this._navButton("steuerung", "Steuerung")}
           <div class="grp">Service</div>
           ${this._navButton("tagesverlauf", "Tagesverlauf")}
           ${this._navButton("protokoll", "Protokoll")}
@@ -320,18 +349,29 @@ class LichtregiePanel extends HTMLElement {
       const control = this.controls.find((c) => c.id === this._controlId);
       if (control) return control.name;
     }
-    return {
-      leitstand: "Leitstand", bedienung: "Bedienelemente", protokoll: "Protokoll",
-      anlage: "Anlage", tagesverlauf: "Tagesverlauf",
-    }[this._view] || "";
+    const zone = this.zoneConfig(this._zoneId);
+    const raum = zone ? ` · ${zone.name}` : "";
+    return (
+      {
+        leitstand: "Leitstand", protokoll: "Protokoll", anlage: "Anlage",
+        tagesverlauf: "Tagesverlauf",
+      }[this._view] ||
+      { lampen: "Lampen", szenen: "Szenen", steuerung: "Steuerung" }[this._view] + raum
+    );
   }
 
   _viewHtml() {
     if (this._error) return `<div class="empty">Die Lichtregie antwortet nicht: ${esc(this._error)}</div>`;
     if (!this._config) return `<div class="empty">Anlage wird geladen …</div>`;
     switch (this._view) {
+      case "lampen":
+        return this._lampsHtml();
+      case "szenen":
+        return this._scenesHtml();
+      case "steuerung":
+        return this._controlHtml();
       case "zone":
-        return this._zoneHtml();
+        return this._scenesHtml();
       case "bedienung":
         return this._controlsHtml();
       case "protokoll":
@@ -477,6 +517,334 @@ class LichtregiePanel extends HTMLElement {
         <button class="btn" data-act="next">Weiterschalten</button>
         <button class="btn pri" data-act="off">Zone aus</button>
       </div>`;
+  }
+
+  // -- Raumleiste -----------------------------------------------------------
+
+  _zonePicker() {
+    if (!this._zoneId && this.zones.length) this._zoneId = this.zones[0].id;
+    return `<div class="zonebar">${this.zones
+      .map(
+        (z) =>
+          `<button class="btn ${z.id === this._zoneId ? "on" : ""}" data-zone="${esc(z.id)}">${esc(z.name)}</button>`
+      )
+      .join("")}</div>`;
+  }
+
+  // -- Lampen ---------------------------------------------------------------
+
+  _lampsHtml() {
+    const zone = this.zoneConfig(this._zoneId) || this.zones[0];
+    if (!zone) return `<div class="empty">Keine Zone vorhanden.</div>`;
+    this._zoneId = zone.id;
+
+    const rollen = [
+      ["general", "Deckenlicht"],
+      ["task", "Arbeitslicht"],
+      ["ambient", "Stimmungslicht"],
+      ["accent", "Akzentlicht"],
+      ["night", "Orientierung"],
+      ["effect", "kein Raumlicht"],
+    ];
+
+    const zeilen = (zone.circuits || [])
+      .map((circuit) => {
+        const f = (circuit.fixtures || [])[0] || {};
+        const kannFarbe = f.color_temp || f.color;
+        // Fehlt der Wert (ältere Konfiguration), gilt geregelt.
+        const fuehrtFarbe = f.manage_color !== false;
+        const max = Math.round((f.max_flux ?? 1) * 100);
+        const min = Math.round((f.min_flux ?? 0.01) * 100);
+        return `<div class="lamp ${circuit.enabled ? "" : "off"}" data-circuit-row="${esc(circuit.id)}">
+          <div>
+            <div class="lname">${esc(circuit.name)}${
+              f.dimmable ? "" : ` <span class="kann">· nicht dimmbar</span>`
+            }</div>
+            <div class="lent">${esc(f.entity_id || "")}</div>
+          </div>
+          <select data-lamp="${esc(circuit.id)}" data-field="role">
+            ${rollen
+              .map(
+                ([v, l]) =>
+                  `<option value="${v}" ${v === circuit.role ? "selected" : ""}>${l}</option>`
+              )
+              .join("")}
+          </select>
+          <div>${
+            kannFarbe
+              ? `<button class="toggle ${fuehrtFarbe ? "on" : ""}"
+                   data-lampflag="${esc(circuit.id)}" data-field="manage_color"><i></i>${
+                  fuehrtFarbe ? "regeln" : "fest"
+                }</button>`
+              : `<span class="kann">keine Farbe</span>`
+          }</div>
+          <div class="num">
+            <input type="number" min="1" max="100" value="${max}"
+              data-lampnum="${esc(circuit.id)}" data-field="max_flux"
+              ${f.dimmable ? "" : "disabled"}>
+            <span class="unit">%</span>
+          </div>
+          <div class="num">
+            <input type="number" min="0" max="99" value="${min}"
+              data-lampnum="${esc(circuit.id)}" data-field="min_flux"
+              ${f.dimmable ? "" : "disabled"}>
+            <span class="unit">%</span>
+          </div>
+          <div>
+            <button class="toggle ${f.glares ? "on" : ""}"
+              data-lampflag="${esc(circuit.id)}" data-field="glares"><i></i>${
+          f.glares ? "blendet" : "frei"
+        }</button>
+          </div>
+        </div>`;
+      })
+      .join("");
+
+    return `<h2>Lampen</h2>
+      <p class="sub">Was für eine Leuchte ist das, soll die Software ihre Farbe führen,
+        und was bedeutet volle Helligkeit? Änderungen wirken sofort.</p>
+      ${this._zonePicker()}
+      <div class="lamp head">
+        <span>Leuchte</span><span>Art</span><span>Farbe</span>
+        <span>Maximum</span><span>Minimum</span><span>Blendung</span>
+      </div>
+      ${zeilen || `<div class="empty">Keine Leuchten in dieser Zone.</div>`}
+      <p class="hint">
+        <b>Maximum</b> ist das, was ein Sollwert von 100 % ausmacht — stehen deine Leuchten
+        nie über 40 %, trägst du hier 40 ein, und „volle Szene" heißt danach genau das.<br>
+        <b>Minimum</b> ist der kleinste Wert, bei dem die Leuchte noch sauber brennt;
+        darunter wird ausgeschaltet statt zu flackern.<br>
+        <b>Blendung</b> sperrt die Leuchte im Nachtfenster.
+      </p>
+      ${this._busy ? `<div class="row"><span class="chip warn">${esc(this._busy)}</span></div>` : ""}`;
+  }
+
+  // -- Szenen ---------------------------------------------------------------
+
+  _scenesHtml() {
+    const zone = this.zoneConfig(this._zoneId) || this.zones[0];
+    if (!zone) return `<div class="empty">Keine Zone vorhanden.</div>`;
+    this._zoneId = zone.id;
+    const st = this.zoneState(zone.id);
+
+    const scenes = (zone.scenes || [])
+      .map(
+        (scene) => `<div class="srow ${
+          this._editScene === scene.id ? "on" : st.scene_id === scene.id ? "on" : ""
+        }">
+          <span class="dot"></span>
+          <button class="btn" data-scene="${esc(scene.id)}" style="border:0;background:none;padding:0">
+            ${esc(scene.name)}</button>
+          <span class="meta">${(scene.steps || []).length} Kreise · ${scene.fade} s</span>
+          <button class="btn" data-edit="${esc(scene.id)}" style="padding:3px 9px;font-size:11px">
+            ${this._editScene === scene.id ? "bearbeitet" : "bearbeiten"}</button>
+          <button class="del" data-delscene="${esc(scene.id)}" title="Szene löschen">×</button>
+        </div>`
+      )
+      .join("");
+
+    const editing = this._editScene
+      ? (zone.scenes || []).find((sc) => sc.id === this._editScene)
+      : null;
+    const sceneLevels = {};
+    if (editing) for (const step of editing.steps || []) sceneLevels[step.circuit_id] = step.level;
+
+    const faders = (zone.circuits || [])
+      .filter((c) => c.enabled)
+      .map((circuit) => {
+        const source = editing ? sceneLevels : st.levels || {};
+        const raw =
+          this._dirty && this._draft[circuit.id] !== undefined
+            ? this._draft[circuit.id]
+            : source[circuit.id] || 0;
+        const value = Math.round(raw * 100);
+        return `<div class="fader">
+            <span class="fname">${esc(circuit.name)}</span>
+            <input type="range" min="0" max="100" value="${value}" data-circuit="${esc(circuit.id)}">
+            <span class="fval" data-val="${esc(circuit.id)}">${value ? value + " %" : "aus"}</span>
+            <span class="role ${esc(circuit.role)}">${esc(ROLE_LABEL[circuit.role] || circuit.role)}</span>
+          </div>`;
+      })
+      .join("");
+
+    return `<h2>Szenen</h2>
+      <p class="sub">Alle Lichtstimmungen dieser Zone. Beim Bearbeiten zeigen die Regler
+        die Szenenwerte und schalten live mit.</p>
+      ${this._zonePicker()}
+      <div class="slist">${scenes || `<div class="empty">Noch keine Szenen.</div>`}</div>
+      <div class="row">
+        <button class="btn pri" data-act="suggest">Szenen vorschlagen</button>
+        <button class="btn" data-act="new-scene">Aktuelles Licht als neue Szene</button>
+      </div>
+
+      <div class="sec">Regler${editing ? ` — „${esc(editing.name)}“` : " — Live"}</div>
+      <div class="faders">${faders}</div>
+      <div class="row">
+        ${
+          editing
+            ? `<button class="btn pri" data-act="save-scene" ${this._dirty ? "" : "disabled"}>
+                 ${this._dirty ? "Szene speichern" : "gespeichert"}</button>
+               <button class="btn" data-act="cancel-edit">Bearbeiten beenden</button>
+               <button class="btn" data-act="snapshot">Ist-Zustand übernehmen</button>`
+            : `<button class="btn" data-act="off">Zone aus</button>`
+        }
+        ${this._busy ? `<span class="chip warn">${esc(this._busy)}</span>` : ""}
+      </div>`;
+  }
+
+  // -- Steuerung ------------------------------------------------------------
+
+  _controlHtml() {
+    const zone = this.zoneConfig(this._zoneId) || this.zones[0];
+    if (!zone) return `<div class="empty">Keine Zone vorhanden.</div>`;
+    this._zoneId = zone.id;
+
+    const szenen = zone.scenes || [];
+    if (!szenen.length) {
+      return `<h2>Steuerung</h2>
+        ${this._zonePicker()}
+        <div class="empty">Erst Szenen anlegen — ohne sie gibt es nichts zu schalten.<br>
+          <button class="btn pri" data-act="to-scenes" style="margin-top:12px">Zu den Szenen</button>
+        </div>`;
+    }
+
+    const szenenWahl = (gewaehlt) =>
+      szenen
+        .map(
+          (sc) =>
+            `<option value="${esc(sc.id)}" ${sc.id === gewaehlt ? "selected" : ""}>${esc(sc.name)}</option>`
+        )
+        .join("");
+
+    // Bewegungsregeln der Zone
+    const bewegung = (zone.bindings || []).filter(
+      (b) => (b.trigger || {}).art === "bewegung"
+    );
+    const melder = zone.presence_entities || [];
+
+    const bewegungszeilen = bewegung
+      .map(
+        (b, i) => `<div class="rule">
+          <div class="src">Bewegung
+            <div class="ent">${esc(melder.join(", ") || "kein Melder")}</div></div>
+          <select data-mo="${i}" data-field="scene_id">${szenenWahl(b.scene_id)}</select>
+          <div class="num">
+            <input type="number" min="1" max="120" value="${Math.round((b.hold_seconds || zone.linger) / 60)}"
+              data-mo="${i}" data-field="minutes"><span class="unit">min</span>
+          </div>
+          <select data-mo="${i}" data-field="nur_nachts">
+            <option value="" ${!(b.conditions || {}).hasOwnProperty("nur_nachts") ? "selected" : ""}>immer</option>
+            <option value="ja" ${(b.conditions || {}).nur_nachts === true ? "selected" : ""}>nur nachts</option>
+            <option value="nein" ${(b.conditions || {}).nur_nachts === false ? "selected" : ""}>nur tags</option>
+          </select>
+          <button class="del" data-delmo="${esc(b.id)}" title="Regel löschen">×</button>
+        </div>`
+      )
+      .join("");
+
+    // Bedieneinheit der Zone
+    const geraete = this.controls.filter((c) => c.zone_id === zone.id);
+    const gewaehlt =
+      this._controlId && geraete.some((c) => c.id === this._controlId)
+        ? this._controlId
+        : (geraete.find((c) => c.buttons >= 2) || geraete[0] || {}).id;
+    const control = geraete.find((c) => c.id === gewaehlt);
+
+    const tasten = control
+      ? Array.from({ length: Math.max(2, control.buttons) }, (_, i) =>
+          control.source === "device_trigger" ? `button_${i + 1}` : String(i + 1)
+        )
+      : [];
+    const gesten = ["tippen", "doppelt", "lang"];
+
+    const tastenzeilen = control
+      ? (control.bindings || [])
+          .map(
+            (b, i) => `<div class="rule">
+          <select data-ta="${i}" data-field="taste">
+            ${tasten
+              .map(
+                (t) =>
+                  `<option value="${t}" ${t === (b.trigger || {}).taste ? "selected" : ""}>${t.replace("button_", "Taste ")}</option>`
+              )
+              .join("")}
+          </select>
+          <select data-ta="${i}" data-field="geste">
+            ${gesten
+              .map(
+                (g) =>
+                  `<option value="${g}" ${g === (b.trigger || {}).geste ? "selected" : ""}>${g}</option>`
+              )
+              .join("")}
+          </select>
+          <select data-ta="${i}" data-field="action">
+            <option value="scene" ${b.action === "scene" ? "selected" : ""}>Szene</option>
+            <option value="zone_aus" ${b.action === "zone_aus" ? "selected" : ""}>Aus</option>
+            <option value="weiter" ${b.action === "weiter" ? "selected" : ""}>nächste Szene</option>
+            <option value="etage_aus" ${b.action === "etage_aus" ? "selected" : ""}>Etage aus</option>
+          </select>
+          <div>${
+            b.action === "scene"
+              ? `<select data-ta="${i}" data-field="scene_id">${szenenWahl(b.scene_id)}</select>`
+              : `<span class="ent">—</span>`
+          }</div>
+          <button class="del" data-delta="${esc(b.id)}" title="Belegung löschen">×</button>
+        </div>`
+          )
+          .join("")
+      : "";
+
+    return `<h2>Steuerung</h2>
+      <p class="sub">Was löst in diesem Raum welche Szene aus.</p>
+      ${this._zonePicker()}
+
+      <div class="sec">Bewegungsmelder</div>
+      ${
+        melder.length
+          ? `<div class="rule head"><span>Auslöser</span><span>Szene</span><span>Nachlauf</span>
+               <span>Bedingung</span><span></span></div>
+             ${bewegungszeilen || `<div class="empty">Noch keine Regel.</div>`}
+             <div class="row"><button class="btn" data-act="add-motion">Bewegungsregel hinzufügen</button></div>`
+          : `<div class="empty">In dieser Zone ist kein Bewegungsmelder zugeordnet.</div>`
+      }
+
+      <div class="sec">Bedieneinheit</div>
+      ${
+        geraete.length
+          ? `<div class="row" style="margin-top:0">
+               <select data-field="unit">
+                 ${geraete
+                   .map(
+                     (c) =>
+                       `<option value="${esc(c.id)}" ${c.id === gewaehlt ? "selected" : ""}>${esc(c.name)} (${c.buttons} Tasten)</option>`
+                   )
+                   .join("")}
+               </select>
+               ${control && control.direct_bound ? `<span class="chip warn">direkt gebunden</span>` : ""}
+             </div>
+             <div class="rule head" style="margin-top:10px"><span>Taste</span><span>Geste</span>
+               <span>Wirkung</span><span>Szene</span><span></span></div>
+             ${tastenzeilen || `<div class="empty">Noch keine Belegung.</div>`}
+             <div class="row">
+               <button class="btn" data-act="add-key">Belegung hinzufügen</button>
+               ${this._templates
+                 .map(
+                   (t) =>
+                     `<button class="btn" data-template="${esc(t.key)}" title="${esc(t.beschreibung)}">${esc(t.name)}</button>`
+                 )
+                 .join("")}
+             </div>
+             <p class="hint">Die Vorlagen ersetzen die gesamte Belegung dieser Bedieneinheit.
+               ${
+                 control && control.direct_bound
+                   ? `<br><b>Achtung:</b> Dieser Sender schaltet über Zigbee direkt an Home Assistant vorbei.
+                      Solange diese Bindung besteht, gewinnt bei jedem Druck das Gerät.`
+                   : ""
+               }</p>`
+          : `<div class="empty">Dieser Zone ist kein Bedienelement zugeordnet.
+               <br><span class="ent">Unter „Anlage" siehst du, welche es gibt.</span></div>`
+      }
+      ${this._busy ? `<div class="row"><span class="chip warn">${esc(this._busy)}</span></div>` : ""}`;
   }
 
   // -- Bedienelemente -------------------------------------------------------
@@ -834,10 +1202,40 @@ class LichtregiePanel extends HTMLElement {
     const target = ev.target.closest(
       "[data-nav],[data-zone],[data-scene],[data-act],[data-release]," +
         "[data-control],[data-template],[data-delbind],[data-curve],[data-toggle],[data-calibrate]," +
-        "[data-edit],[data-delscene]"
+        "[data-edit],[data-delscene],[data-lampflag],[data-delmo],[data-delta]"
     );
     if (!target) return;
 
+    if (target.dataset.lampflag) {
+      const zone = this.zoneConfig(this._zoneId);
+      const circuit = (zone.circuits || []).find((c) => c.id === target.dataset.lampflag);
+      const f = (circuit.fixtures || [])[0];
+      const feld = target.dataset.field;
+      await this._call("lichtregie/fixture/set", {
+        zone_id: this._zoneId,
+        circuit_id: circuit.id,
+        entity_id: f.entity_id,
+        [feld]: !f[feld],
+      });
+      this._config = await this._call("lichtregie/config/get");
+      return this._render();
+    }
+    if (target.dataset.delmo) {
+      await this._call("lichtregie/binding/delete", {
+        zone_id: this._zoneId,
+        binding_id: target.dataset.delmo,
+      });
+      this._config = await this._call("lichtregie/config/get");
+      return this._render();
+    }
+    if (target.dataset.delta) {
+      await this._call("lichtregie/binding/delete", {
+        control_id: this._activeControlId(),
+        binding_id: target.dataset.delta,
+      });
+      this._config = await this._call("lichtregie/config/get");
+      return this._render();
+    }
     if (target.dataset.edit) {
       this._editScene = this._editScene === target.dataset.edit ? null : target.dataset.edit;
       this._dirty = false;
@@ -874,7 +1272,7 @@ class LichtregiePanel extends HTMLElement {
       this._render();
       try {
         await this._call("lichtregie/template/apply", {
-          control_id: this._controlId,
+          control_id: this._activeControlId(),
           template: target.dataset.template,
         });
         this._config = await this._call("lichtregie/config/get");
@@ -930,7 +1328,9 @@ class LichtregiePanel extends HTMLElement {
     }
     if (target.dataset.zone) {
       this._zoneId = target.dataset.zone;
-      this._view = "zone";
+      if (!["lampen", "szenen", "steuerung"].includes(this._view)) {
+        this._view = "szenen";
+      }
       this._editScene = null;
       this._dirty = false;
       this._draft = {};
@@ -1034,6 +1434,47 @@ class LichtregiePanel extends HTMLElement {
           : "Ist-Zustand gelesen. Zum Sichern eine Szene bearbeiten.";
         return this._render();
       }
+      case "to-scenes":
+        this._view = "szenen";
+        return this._render();
+      case "add-motion": {
+        const zone = this.zoneConfig(this._zoneId);
+        await this._call("lichtregie/binding/set", {
+          zone_id: this._zoneId,
+          binding: {
+            id: `m${Date.now().toString(36)}`,
+            trigger: { art: "bewegung" },
+            action: "scene",
+            scene_id: (zone.scenes[0] || {}).id,
+            layer: 40,
+            hold: "solange_belegt",
+            hold_seconds: zone.linger,
+            conditions: {},
+          },
+        });
+        this._config = await this._call("lichtregie/config/get");
+        return this._render();
+      }
+      case "add-key": {
+        const zone = this.zoneConfig(this._zoneId);
+        const control = this.controls.find((c) => c.id === this._activeControlId());
+        if (!control) return;
+        const taste = control.source === "device_trigger" ? "button_1" : "1";
+        await this._call("lichtregie/binding/set", {
+          control_id: control.id,
+          binding: {
+            id: `t${Date.now().toString(36)}`,
+            trigger: { art: "taste", taste, geste: "tippen" },
+            action: "scene",
+            scene_id: (zone.scenes[0] || {}).id,
+            layer: 50,
+            hold: "bis_leer",
+            conditions: {},
+          },
+        });
+        this._config = await this._call("lichtregie/config/get");
+        return this._render();
+      }
       case "controls-back":
         this._controlId = null;
         return this._render();
@@ -1092,6 +1533,75 @@ class LichtregiePanel extends HTMLElement {
     this._render();
   }
 
+  _activeControlId() {
+    const geraete = this.controls.filter((c) => c.zone_id === this._zoneId);
+    if (this._controlId && geraete.some((c) => c.id === this._controlId)) {
+      return this._controlId;
+    }
+    const wahl = geraete.find((c) => c.buttons >= 2) || geraete[0];
+    return wahl ? wahl.id : null;
+  }
+
+  async _saveMotion(index, field, value) {
+    const zone = this.zoneConfig(this._zoneId);
+    const regeln = (zone.bindings || []).filter((b) => (b.trigger || {}).art === "bewegung");
+    const b = JSON.parse(JSON.stringify(regeln[index]));
+    if (!b) return;
+    if (field === "minutes") {
+      b.hold_seconds = Math.max(30, Number(value) * 60);
+    } else if (field === "nur_nachts") {
+      b.conditions = { ...(b.conditions || {}) };
+      if (value === "") delete b.conditions.nur_nachts;
+      else b.conditions.nur_nachts = value === "ja";
+    } else {
+      b[field] = value;
+    }
+    await this._call("lichtregie/binding/set", { zone_id: this._zoneId, binding: b });
+    this._config = await this._call("lichtregie/config/get");
+    this._render();
+  }
+
+  async _saveKey(index, field, value) {
+    const control = this.controls.find((c) => c.id === this._activeControlId());
+    if (!control) return;
+    const b = JSON.parse(JSON.stringify((control.bindings || [])[index]));
+    if (!b) return;
+    if (field === "taste" || field === "geste") {
+      b.trigger = { ...b.trigger, art: "taste", [field]: value };
+    } else {
+      b[field] = value;
+    }
+    await this._call("lichtregie/binding/set", { control_id: control.id, binding: b });
+    this._config = await this._call("lichtregie/config/get");
+    this._render();
+  }
+
+  async _saveLamp(circuitId, field, value) {
+    const zone = this.zoneConfig(this._zoneId);
+    const circuit = (zone.circuits || []).find((c) => c.id === circuitId);
+    if (!circuit) return;
+
+    if (field === "role") {
+      await this._call("lichtregie/circuit/set", {
+        zone_id: this._zoneId,
+        circuit_id: circuitId,
+        role: value,
+        enabled: value !== "effect",
+      });
+    } else {
+      const f = (circuit.fixtures || [])[0];
+      const anteil = Math.min(100, Math.max(0, Number(value))) / 100;
+      await this._call("lichtregie/fixture/set", {
+        zone_id: this._zoneId,
+        circuit_id: circuitId,
+        entity_id: f.entity_id,
+        [field]: anteil,
+      });
+    }
+    this._config = await this._call("lichtregie/config/get");
+    this._render();
+  }
+
   _onInput(ev) {
     const slider = ev.target.closest("input[data-circuit]");
     if (!slider) return;
@@ -1112,6 +1622,22 @@ class LichtregiePanel extends HTMLElement {
   }
 
   async _onChange(ev) {
+    const lamp = ev.target.closest("[data-lamp],[data-lampnum]");
+    if (lamp) {
+      const id = lamp.dataset.lamp || lamp.dataset.lampnum;
+      return this._saveLamp(id, lamp.dataset.field, lamp.value);
+    }
+    const mo = ev.target.closest("[data-mo]");
+    if (mo) return this._saveMotion(Number(mo.dataset.mo), mo.dataset.field, mo.value);
+    const ta = ev.target.closest("[data-ta]");
+    if (ta) return this._saveKey(Number(ta.dataset.ta), ta.dataset.field, ta.value);
+
+    const unit = ev.target.closest('[data-field="unit"]');
+    if (unit) {
+      this._controlId = unit.value;
+      return this._render();
+    }
+
     const field = ev.target.closest("[data-field]");
     if (field && field.dataset.field === "control_zone") {
       const control = this.controls.find((c) => c.id === this._controlId);

@@ -62,6 +62,8 @@ def async_register(hass: HomeAssistant) -> None:
         ws_scene_set,
         ws_scene_delete,
         ws_scene_snapshot,
+        ws_circuit_set,
+        ws_fixture_set,
     ):
         websocket_api.async_register_command(hass, handler)
 
@@ -693,3 +695,114 @@ def ws_scene_snapshot(hass, connection, msg) -> None:
             "kelvin": engine.snapshot_kelvin(msg["zone_id"]),
         },
     )
+
+
+# --------------------------------------------------------------------------
+# Lampen einstellen
+# --------------------------------------------------------------------------
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "lichtregie/circuit/set",
+        vol.Required("zone_id"): str,
+        vol.Required("circuit_id"): str,
+        vol.Optional("role"): str,
+        vol.Optional("name"): str,
+        vol.Optional("enabled"): bool,
+    }
+)
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_circuit_set(hass, connection, msg) -> None:
+    """Ändert die Einstellungen eines Lichtkreises — vor allem die Rolle."""
+    store = _store(hass)
+    zone = store.installation.zone(msg["zone_id"])
+    circuit = zone.circuit(msg["circuit_id"]) if zone else None
+    if circuit is None:
+        connection.send_error(msg["id"], "unbekannt", "Lichtkreis nicht gefunden")
+        return
+
+    for feld in ("role", "name", "enabled"):
+        if feld in msg:
+            setattr(circuit, feld, msg[feld])
+
+    # Nachtfähigkeit folgt der Rolle, solange sie nicht von Hand gesetzt ist.
+    if "role" in msg:
+        for fixture in circuit.fixtures:
+            fixture.night_capable = circuit.role in ("night", "ambient")
+
+    await store.save(label=f"Lichtkreis {circuit.name}")
+    _engine(hass).rebuild()
+    connection.send_result(msg["id"], {"ok": True, "circuit": circuit.to_dict()})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "lichtregie/fixture/set",
+        vol.Required("zone_id"): str,
+        vol.Required("circuit_id"): str,
+        vol.Required("entity_id"): str,
+        vol.Optional("max_flux"): vol.Coerce(float),
+        vol.Optional("min_flux"): vol.Coerce(float),
+        vol.Optional("manage_color"): bool,
+        vol.Optional("glares"): bool,
+        vol.Optional("night_capable"): bool,
+        vol.Optional("curve"): str,
+        vol.Optional("watts"): vol.Coerce(float),
+    }
+)
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_fixture_set(hass, connection, msg) -> None:
+    """Ändert die Betriebsgrenzen einer Leuchte.
+
+    Wichtigster Wert ist ``max_flux``: was ein Sollwert von 100 Prozent
+    tatsächlich bedeutet. Wer seine Leuchten nie über 40 Prozent fährt,
+    trägt das hier einmal ein — danach heißt „volle Szene" genau das.
+    """
+    store = _store(hass)
+    zone = store.installation.zone(msg["zone_id"])
+    circuit = zone.circuit(msg["circuit_id"]) if zone else None
+    fixture = (
+        next((f for f in circuit.fixtures if f.entity_id == msg["entity_id"]), None)
+        if circuit
+        else None
+    )
+    if fixture is None:
+        connection.send_error(msg["id"], "unbekannt", "Leuchte nicht gefunden")
+        return
+
+    for feld in (
+        "max_flux",
+        "min_flux",
+        "manage_color",
+        "glares",
+        "night_capable",
+        "curve",
+        "watts",
+    ):
+        if feld in msg:
+            setattr(fixture, feld, msg[feld])
+
+    # Grenzen plausibel halten: der Minimalwert muss unter dem Maximum liegen.
+    if fixture.min_flux >= fixture.max_flux:
+        fixture.min_flux = max(0.0, fixture.max_flux - 0.01)
+
+    await store.save(label=f"Leuchte {fixture.name}")
+    _engine(hass).rebuild()
+    connection.send_result(
+        msg["id"],
+        {
+            "ok": True,
+            "fixture": fixture.to_dict(),
+            "stufen": _usable_steps(fixture),
+        },
+    )
+
+
+def _usable_steps(fixture) -> int:
+    """Wie viele unterscheidbare Helligkeitsstufen bleiben."""
+    from ..core.photometry import usable_steps
+
+    return usable_steps(fixture.curve, fixture.min_flux, fixture.max_flux)

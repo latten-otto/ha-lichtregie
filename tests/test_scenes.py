@@ -145,6 +145,22 @@ def test_resolve_skips_kelvin_for_plain_dimmers():
     assert cmds["light.spots"].kelvin is None
 
 
+def test_farbtemperatur_abschaltbar():
+    """Manche Leuchten sollen ihre Farbe behalten, obwohl sie es könnten."""
+    zone = living_room()
+    zone.circuits[3].fixtures[0] = fixture("light.lese", manage_color=False)
+    cmds = {c.entity_id: c for c in resolve_scene(zone, {"k4": 1.0}, {"k4": 4000})}
+    assert cmds["light.lese"].kelvin is None
+
+
+def test_maximalhelligkeit_begrenzt():
+    """Sein Fall: die meisten Leuchten laufen höchstens auf 40 Prozent."""
+    zone = hallway()
+    zone.circuits[0].fixtures[0] = fixture("light.flur", max_flux=0.40)
+    voll = resolve_scene(zone, {"k1": 1.0})[0].brightness
+    assert voll == round(0.40 * 255)
+
+
 def test_night_blocks_glaring_and_non_night_circuits():
     zone = living_room()
     cmds = {

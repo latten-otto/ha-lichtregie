@@ -53,6 +53,10 @@ class Fixture:
     # Eigenschaften für Regeln
     glares: bool = False
     night_capable: bool = False
+    # Ob die Software die Farbtemperatur führen darf. Kann die Leuchte es
+    # nicht, ist es ohnehin aus; kann sie es, will man es trotzdem nicht
+    # immer — manche Leuchten sollen ihre eingestellte Farbe behalten.
+    manage_color: bool = True
 
     # Messwerte. Der Lux-Beitrag steht nicht hier, sondern in der
     # Kalibrierung der Zone — dort wird je Lichtkreis gemessen, und ein

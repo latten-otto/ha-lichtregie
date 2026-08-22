@@ -292,7 +292,9 @@ def resolve_scene(
                 else 255
             )
             fixture_kelvin = None
-            if target_kelvin and (fixture.color_temp or fixture.color):
+            if target_kelvin and fixture.manage_color and (
+                fixture.color_temp or fixture.color
+            ):
                 fixture_kelvin = int(
                     fit_kelvin(target_kelvin, fixture.min_kelvin, fixture.max_kelvin)
                 )
