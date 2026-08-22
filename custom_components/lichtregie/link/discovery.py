@@ -174,9 +174,29 @@ async def discover_controls(hass: HomeAssistant) -> list[ControlPoint]:
                     )
                 )
             except Exception as err:  # noqa: BLE001
-                _LOGGER.warning(
-                    "Geräteauslöser für %s Geräte nicht lesbar: %s", len(block), err
+                # Ein einzelnes Gerät kann den ganzen Block scheitern
+                # lassen. Dann eben einzeln — langsamer, aber es geht
+                # kein Taster verloren.
+                _LOGGER.debug(
+                    "Block mit %s Geräten nicht lesbar (%s: %s), fasse einzeln nach",
+                    len(block),
+                    type(err).__name__,
+                    err,
                 )
+                for device_id in block:
+                    try:
+                        found.update(
+                            await async_get_device_automations(
+                                hass, DeviceAutomationType.TRIGGER, [device_id]
+                            )
+                        )
+                    except Exception as single:  # noqa: BLE001
+                        _LOGGER.warning(
+                            "Geräteauslöser für %s nicht lesbar (%s: %s)",
+                            device_id,
+                            type(single).__name__,
+                            single,
+                        )
         _LOGGER.info(
             "Geräteauslöser: %s von %s Geräten melden Auslöser",
             len(found),

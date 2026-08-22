@@ -230,7 +230,18 @@ def zone_from_name(name: str, zones: dict[str, str]) -> str | None:
         for zone_id, zone_name in zones.items()
         if zone_name.lower() in lowered
     ]
-    if not treffer:
-        return None
-    treffer.sort(key=lambda x: len(x[0]), reverse=True)
-    return treffer[0][1]
+    if treffer:
+        treffer.sort(key=lambda x: len(x[0]), reverse=True)
+        return treffer[0][1]
+
+    # Zweiter Versuch über das erste Wort des Zonennamens: ein „Wandsender
+    # Flur" gehört in die Zone „Flur unten". Nur wenn es eindeutig ist —
+    # bei „Bad oben" und „Bad unten" träfe „Bad" auf beide, dann lieber
+    # keine Zuordnung als die falsche.
+    kandidaten: dict[str, list[str]] = {}
+    for zone_id, zone_name in zones.items():
+        leitwort = zone_name.lower().split()[0] if zone_name.split() else ""
+        if len(leitwort) >= 3 and leitwort in lowered:
+            kandidaten.setdefault(leitwort, []).append(zone_id)
+    eindeutig = [ids[0] for ids in kandidaten.values() if len(ids) == 1]
+    return eindeutig[0] if len(eindeutig) == 1 else None

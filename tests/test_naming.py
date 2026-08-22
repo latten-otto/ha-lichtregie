@@ -228,6 +228,16 @@ def test_laengster_treffer_gewinnt():
     assert zone_from_name("Wandsender Bad oben", ZONEN) == "z3"
 
 
+def test_leitwort_wenn_eindeutig():
+    """„Wandsender Flur" gehört in die Zone „Flur unten"."""
+    assert zone_from_name("Wandsender Flur", ZONEN) == "z1"
+
+
+def test_mehrdeutiges_leitwort_bleibt_offen():
+    """„Bad" träfe auf Bad oben und Bad unten — dann lieber keine Zone."""
+    assert zone_from_name("Wandsender Bad", ZONEN) is None
+
+
 def test_ohne_treffer_keine_zone():
     assert zone_from_name("Wandsender Bett Christian", ZONEN) is None
     assert zone_from_name("", ZONEN) is None
