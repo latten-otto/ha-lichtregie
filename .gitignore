@@ -1,0 +1,7 @@
+*.pyc
+*.zip
+.DS_Store
+.preview/
+.preview/panel
+__pycache__/
+hatest/

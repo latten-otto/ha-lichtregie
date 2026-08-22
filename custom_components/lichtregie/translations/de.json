@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Lichtregie einrichten",
+        "description": "Die Anlage wird beim ersten Start eingelesen. Alles Weitere stellst du in der Lichtregie-Oberfläche in der Seitenleiste ein."
+      }
+    },
+    "abort": {
+      "already_configured": "Lichtregie ist bereits eingerichtet."
+    }
+  }
+}

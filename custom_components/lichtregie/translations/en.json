@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up Lichtregie",
+        "description": "The installation is read in on first start. Everything else is configured in the Lichtregie panel in the sidebar."
+      }
+    },
+    "abort": {
+      "already_configured": "Lichtregie is already set up."
+    }
+  }
+}
