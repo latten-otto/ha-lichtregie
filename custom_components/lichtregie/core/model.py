@@ -165,7 +165,7 @@ class Circuit:
 
 @dataclass
 class SceneStep:
-    """Sollwert eines Kreises innerhalb einer Szene."""
+    """Sollwert eines Kreises — nur noch für das Einlesen alter Fassungen."""
 
     circuit_id: str
     level: float = 0.0
@@ -185,31 +185,58 @@ class SceneStep:
 
 @dataclass
 class Scene:
-    """Eine gespeicherte Lichtstimmung einer Zone."""
+    """Eine gespeicherte Lichtstimmung einer Zone.
+
+    Eine Szene wird in Ebenen gedacht, nicht in Leuchten: „Stimmung auf
+    45 %, Deckenlicht auf 15 %". Dadurch bleibt sie gültig, wenn eine
+    Leuchte dazukommt oder wegfällt — sie erbt den Wert ihrer Rolle.
+
+    ``overrides`` hält die Ausnahmen: einzelne Lichtkreise, die von ihrem
+    Rollenwert abweichen sollen. Ein Wert von 0 nimmt den Kreis aus der
+    Szene heraus, obwohl seine Rolle leuchtet.
+    """
 
     id: str
     name: str
-    steps: list[SceneStep] = field(default_factory=list)
+    levels: dict[str, float] = field(default_factory=dict)  # je Rolle
+    overrides: dict[str, float] = field(default_factory=dict)  # je Lichtkreis
+    kelvin: int | None = None
     fade: float = 1.5
-    follows_daylight: bool = False  # Tagesverlauf darf die Farbe nachführen
-    max_lux: float | None = None  # nur unterhalb dieser Fremdhelligkeit anbieten
-    min_state: str | None = None  # erst ab diesem Zonenzustand
+    follows_daylight: bool = False
+    max_lux: float | None = None
+    min_state: str | None = None
 
-    def level_of(self, circuit_id: str) -> float:
-        for step in self.steps:
-            if step.circuit_id == circuit_id:
-                return step.level
-        return 0.0
+    def level_for(self, circuit: "Circuit") -> float:
+        """Sollwert eines Lichtkreises in dieser Szene.
+
+        Die Ausnahme schlägt die Rolle. Hat ein Kreis mehrere Rollen,
+        gilt die hellste — sonst würde eine Leuchte, die Akzent und
+        Orientierung ist, in der Akzentszene auf Nachtniveau laufen.
+        """
+        if circuit.id in self.overrides:
+            return self.overrides[circuit.id]
+        werte = [self.levels.get(rolle, 0.0) for rolle in circuit.roles]
+        return max(werte) if werte else 0.0
+
+    def resolve(self, zone: "Zone") -> dict[str, float]:
+        """Alle Sollwerte der Zone in dieser Szene."""
+        return {
+            c.id: self.level_for(c)
+            for c in zone.circuits
+            if c.enabled and self.level_for(c) > 0
+        }
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "name": self.name,
+            "levels": dict(self.levels),
+            "overrides": dict(self.overrides),
+            "kelvin": self.kelvin,
             "fade": self.fade,
             "follows_daylight": self.follows_daylight,
             "max_lux": self.max_lux,
             "min_state": self.min_state,
-            "steps": [s.to_dict() for s in self.steps],
         }
 
     @classmethod
@@ -217,11 +244,13 @@ class Scene:
         return cls(
             id=data["id"],
             name=data.get("name", data["id"]),
+            levels={k: float(v) for k, v in (data.get("levels") or {}).items()},
+            overrides={k: float(v) for k, v in (data.get("overrides") or {}).items()},
+            kelvin=data.get("kelvin"),
             fade=float(data.get("fade", 1.5)),
             follows_daylight=data.get("follows_daylight", False),
             max_lux=data.get("max_lux"),
             min_state=data.get("min_state"),
-            steps=[SceneStep.from_dict(s) for s in data.get("steps", [])],
         )
 
 

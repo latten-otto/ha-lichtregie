@@ -101,9 +101,9 @@ def test_night_scene_falls_back_to_ambient():
     zone = living_room()  # hat keinen night-Kreis
     scenes = {s.id: s for s in suggest_scenes(zone)}
     assert "nachtgang" in scenes
-    step = scenes["nachtgang"].steps[0]
-    assert step.circuit_id == "k2"  # die Voute
-    assert step.level <= 0.05
+    kreise = scenes["nachtgang"].resolve(zone)
+    assert set(kreise) == {"k2"}  # die Voute
+    assert kreise["k2"] <= 0.05
 
 
 def test_mehrere_rollen_je_kreis():
@@ -113,21 +113,39 @@ def test_mehrere_rollen_je_kreis():
     deko.roles = [ACCENT, NIGHT]
     scenes = {s.id: s for s in suggest_scenes(zone)}
     # Als Orientierung trägt sie die Nachtszene …
-    assert scenes["nachtgang"].level_of(deko.id) > 0
+    assert scenes["nachtgang"].level_for(deko) > 0
     # … und als Akzent das Fernsehen.
-    assert scenes["fernsehen"].level_of(deko.id) > 0
+    assert scenes["fernsehen"].level_for(deko) > 0
 
 
-def test_kreis_erscheint_nur_einmal_je_szene():
+def test_hoechster_rollenwert_gilt():
     """Trifft eine Szene zwei Rollen desselben Kreises, gilt der höhere Wert."""
     zone = living_room()
     kreis = zone.circuits[1]
     kreis.roles = [AMBIENT, ACCENT]
     szene = {s.id: s for s in suggest_scenes(zone)}["entspannen"]
-    treffer = [st for st in szene.steps if st.circuit_id == kreis.id]
-    assert len(treffer) == 1
     # Akzent (0.60) schlägt Stimmung (0.45)
-    assert treffer[0].level == 0.6
+    assert szene.level_for(kreis) == 0.6
+    assert szene.resolve(zone)[kreis.id] == 0.6
+
+
+def test_ausnahme_schlaegt_die_rolle():
+    """Eine einzelne Leuchte darf vom Rollenwert abweichen."""
+    from lichtregie.core.model import Scene
+
+    zone = living_room()
+    szene = Scene(id="s", name="S", levels={AMBIENT: 0.5}, overrides={"k2": 0.1})
+    assert szene.level_for(zone.circuits[1]) == 0.1
+
+
+def test_ausnahme_null_nimmt_kreis_heraus():
+    """Wert 0 lässt die Leuchte aus, obwohl ihre Rolle leuchtet."""
+    from lichtregie.core.model import Scene
+
+    zone = living_room()
+    szene = Scene(id="s", name="S", levels={ACCENT: 0.8}, overrides={"k3": 0.0})
+    assert szene.level_for(zone.circuits[2]) == 0.0
+    assert "k3" not in szene.resolve(zone)
 
 
 def test_suggestions_never_overwrite():
@@ -138,9 +156,11 @@ def test_suggestions_never_overwrite():
 
 
 def test_scene_levels_are_sane():
-    for scene in suggest_scenes(living_room()):
-        for step in scene.steps:
-            assert 0.0 < step.level <= 1.0, (scene.id, step)
+    zone = living_room()
+    for scene in suggest_scenes(zone):
+        for rolle, wert in scene.levels.items():
+            assert 0.0 < wert <= 1.0, (scene.id, rolle, wert)
+        assert scene.resolve(zone), scene.id
 
 
 # --- Auflösung -------------------------------------------------------------

@@ -20,7 +20,7 @@ from ..const import (
     ROLE_NIGHT,
     ROLE_TASK,
 )
-from .model import Circuit, Scene, SceneStep, Zone
+from .model import Circuit, Scene, Zone
 from .photometry import fit_kelvin, level_to_brightness
 
 __all__ = ["Intent", "INTENTS", "suggest_scenes", "resolve_scene", "Command"]
@@ -179,30 +179,29 @@ def suggest_scenes(zone: Zone) -> list[Scene]:
         if missing:
             continue
 
-        # Ein Kreis kann mehrere Rollen haben und damit von mehreren
-        # Anteilen einer Szene getroffen werden — dann gilt der höchste.
-        werte: dict[str, float] = {}
+        # Der Vorschlag steht ohnehin in Rollen — jetzt bleibt er auch so.
+        levels: dict[str, float] = {}
         for role, level in intent.levels.items():
             circuits, factor = _role_target(zone, role)
-            for circuit in circuits:
-                value = round(min(1.0, level * factor), 3)
-                if value > werte.get(circuit.id, 0.0):
-                    werte[circuit.id] = value
+            if not circuits:
+                continue
+            # Springt eine andere Rolle ein, gilt ihr Wert für deren Kreise.
+            ziel = role if factor == 1.0 else circuits[0].role
+            wert = round(min(1.0, level * factor), 3)
+            if wert > levels.get(ziel, 0.0):
+                levels[ziel] = wert
 
-        kelvin = None if intent.kelvin == KELVIN_DAYLIGHT else int(intent.kelvin)
-        steps = [
-            SceneStep(circuit_id=cid, level=value, kelvin=kelvin)
-            for cid, value in werte.items()
-            if value > 0
-        ]
-        if not steps:
+        if not levels:
             continue
 
         out.append(
             Scene(
                 id=intent.key,
                 name=intent.name,
-                steps=steps,
+                levels=levels,
+                kelvin=(
+                    None if intent.kelvin == KELVIN_DAYLIGHT else int(intent.kelvin)
+                ),
                 fade=intent.fade,
                 follows_daylight=intent.follows_daylight,
                 max_lux=intent.max_lux,

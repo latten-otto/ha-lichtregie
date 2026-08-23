@@ -534,10 +534,10 @@ class Engine:
                 return
 
         expires = expiry_for(binding, zone, self._context(runtime, now))
-        levels = {step.circuit_id: step.level for step in scene.steps}
-        kelvin = {
-            step.circuit_id: step.kelvin for step in scene.steps if step.kelvin
-        }
+        levels = scene.resolve(zone)
+        kelvin = (
+            {cid: scene.kelvin for cid in levels} if scene.kelvin else {}
+        )
 
         if running is not None and running.scene_id and running.scene_id != scene.id:
             runtime.previous_scene = running.scene_id
@@ -554,8 +554,12 @@ class Engine:
                 Claim(
                     layer=binding.layer,
                     scene_id=twin.id,
-                    levels={s.circuit_id: s.level for s in twin.steps},
-                    kelvin={s.circuit_id: s.kelvin for s in twin.steps if s.kelvin},
+                    levels=twin.resolve(other.zone),
+                    kelvin=(
+                        {c.id: twin.kelvin for c in other.zone.circuits}
+                        if twin.kelvin
+                        else {}
+                    ),
                     fade=twin.fade,
                     source=f"{source} (mit {zone.name})",
                     expires_at=expires,
@@ -785,10 +789,12 @@ class Engine:
                     Claim(
                         layer=claim.layer,
                         scene_id=scene.id,
-                        levels={s.circuit_id: s.level for s in scene.steps},
-                        kelvin={
-                            s.circuit_id: s.kelvin for s in scene.steps if s.kelvin
-                        },
+                        levels=scene.resolve(runtime.zone),
+                        kelvin=(
+                            {c.id: scene.kelvin for c in runtime.zone.circuits}
+                            if scene.kelvin
+                            else {}
+                        ),
                         fade=scene.fade,
                         source="vorherige Szene",
                         expires_at=None,

@@ -11,7 +11,7 @@ const CSS = `
   --bg:#0E0F12; --panel:#16181D; --panel2:#1D2027; --line:#282C35;
   --ink:#E8E9EC; --soft:#9AA0AC; --faint:#646A78;
   --amber:#F0A63C; --blue:#5FA8D8; --green:#69B87C; --red:#E0705C; --violet:#9B84D4;
-  display:block; height:100%; background:var(--bg); color:var(--ink);
+  display:block; min-height:100%; background:var(--bg); color:var(--ink);
   font-family:"Archivo",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
   font-size:14px;
 }
@@ -28,7 +28,7 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .chip.ok{color:var(--green);border-color:#2A4433}
 .chip.warn{color:var(--amber);border-color:#4A3B22}
 .chip.alarm{color:var(--red);border-color:#4A2A26}
-.body{display:grid;grid-template-columns:172px 1fr;min-height:calc(100% - 44px)}
+.body{display:grid;grid-template-columns:172px 1fr;min-height:calc(100vh - 44px)}
 nav{border-right:1px solid var(--line);padding:12px 0;background:#121419}
 nav button{display:block;width:100%;text-align:left;padding:8px 18px;font-size:13px;
   color:var(--soft);border-left:2px solid transparent}
@@ -250,6 +250,7 @@ class LichtregiePanel extends HTMLElement {
     this._draft = {};
     this._dialog = null;
     this._freeLights = null;
+    this._showOverrides = false;
     this._busy = "";
     this._bound = false;
     this._ready = false;
@@ -843,70 +844,150 @@ class LichtregiePanel extends HTMLElement {
     if (!zone) return `<div class="empty">Keine Zone vorhanden.</div>`;
     this._zoneId = zone.id;
     const st = this.zoneState(zone.id);
+    const kreise = (zone.circuits || []).filter((c) => c.enabled);
+
+    // Welche Rollen kommen in dieser Zone überhaupt vor?
+    const rollenInZone = [];
+    for (const c of kreise) {
+      for (const r of c.roles && c.roles.length ? c.roles : [c.role]) {
+        if (!rollenInZone.includes(r)) rollenInZone.push(r);
+      }
+    }
+    const reihenfolge = ["general", "task", "ambient", "accent", "night", "effect"];
+    rollenInZone.sort((a, b) => reihenfolge.indexOf(a) - reihenfolge.indexOf(b));
 
     const scenes = (zone.scenes || [])
-      .map(
-        (scene) => `<div class="srow ${
+      .map((scene) => {
+        const anzahl = Object.keys(this._sceneLevels(zone, scene)).length;
+        return `<div class="srow ${
           this._editScene === scene.id ? "on" : st.scene_id === scene.id ? "on" : ""
         }">
           <span class="dot"></span>
           <button class="btn" data-scene="${esc(scene.id)}" style="border:0;background:none;padding:0">
             ${esc(scene.name)}</button>
-          <span class="meta">${(scene.steps || []).length} Kreise · ${scene.fade} s</span>
+          <span class="meta">${anzahl} Leuchten${
+            Object.keys(scene.overrides || {}).length
+              ? ` · ${Object.keys(scene.overrides).length} Ausnahme(n)`
+              : ""
+          } · ${scene.fade} s</span>
           <button class="btn" data-edit="${esc(scene.id)}" style="padding:3px 9px;font-size:11px">
             ${this._editScene === scene.id ? "bearbeitet" : "bearbeiten"}</button>
           <button class="del" data-delscene="${esc(scene.id)}" title="Szene löschen">×</button>
-        </div>`
-      )
+        </div>`;
+      })
       .join("");
 
     const editing = this._editScene
       ? (zone.scenes || []).find((sc) => sc.id === this._editScene)
       : null;
-    const sceneLevels = {};
-    if (editing) for (const step of editing.steps || []) sceneLevels[step.circuit_id] = step.level;
 
-    const faders = (zone.circuits || [])
-      .filter((c) => c.enabled)
-      .map((circuit) => {
-        const source = editing ? sceneLevels : st.levels || {};
-        const raw =
-          this._dirty && this._draft[circuit.id] !== undefined
-            ? this._draft[circuit.id]
-            : source[circuit.id] || 0;
-        const value = Math.round(raw * 100);
+    if (!editing) {
+      return `<h2>Szenen</h2>
+        <p class="sub">Eine Szene wird in Ebenen eingestellt: Deckenlicht, Arbeitslicht,
+          Stimmung. Einzelne Leuchten können davon abweichen.</p>
+        ${this._zonePicker()}
+        <div class="slist">${scenes || `<div class="empty">Noch keine Szenen.</div>`}</div>
+        <div class="row">
+          <button class="btn pri" data-act="suggest">Szenen vorschlagen</button>
+          <button class="btn" data-act="new-scene">Aktuelles Licht als neue Szene</button>
+          <button class="btn" data-act="off">Zone aus</button>
+        </div>
+        ${this._busy ? `<div class="row"><span class="chip warn">${esc(this._busy)}</span></div>` : ""}`;
+    }
+
+    // --- Bearbeiten -------------------------------------------------------
+    const entwurf = this._draft.levels || { ...(editing.levels || {}) };
+    const ausnahmen = this._draft.overrides || { ...(editing.overrides || {}) };
+
+    const rollenRegler = rollenInZone
+      .map((rolle) => {
+        const wert = Math.round((entwurf[rolle] ?? 0) * 100);
+        const zahl = kreise.filter((c) =>
+          (c.roles && c.roles.length ? c.roles : [c.role]).includes(rolle)
+        ).length;
         return `<div class="fader">
-            <span class="fname">${esc(circuit.name)}</span>
-            <input type="range" min="0" max="100" value="${value}" data-circuit="${esc(circuit.id)}">
-            <span class="fval" data-val="${esc(circuit.id)}">${value ? value + " %" : "aus"}</span>
-            <span class="role ${esc(circuit.role)}">${esc(ROLE_LABEL[circuit.role] || circuit.role)}</span>
-          </div>`;
+          <span class="fname">${esc(ROLE_LABEL[rolle] || rolle)}<br>
+            <span class="ent">${zahl} Leuchte${zahl === 1 ? "" : "n"}</span></span>
+          <input type="range" min="0" max="100" value="${wert}" data-rolle="${esc(rolle)}">
+          <span class="fval" data-rval="${esc(rolle)}">${wert ? wert + " %" : "aus"}</span>
+          <span class="role ${esc(rolle)}">${esc(ROLE_LABEL[rolle] || rolle)}</span>
+        </div>`;
+      })
+      .join("");
+
+    const ausnahmeZeilen = kreise
+      .map((c) => {
+        const eigene = c.roles && c.roles.length ? c.roles : [c.role];
+        const ausRolle = Math.max(...eigene.map((r) => entwurf[r] ?? 0), 0);
+        const hat = Object.prototype.hasOwnProperty.call(ausnahmen, c.id);
+        const wert = Math.round((hat ? ausnahmen[c.id] : ausRolle) * 100);
+        return `<div class="rule" style="grid-template-columns:minmax(160px,1.4fr) 150px 120px 30px">
+          <div class="src">${esc(c.icon || ROLE_DEFAULT_ICON[eigene[0]] || "💡")} ${esc(c.name)}
+            <div class="ent">${eigene.map((r) => esc(ROLE_LABEL[r] || r)).join(" + ")}</div></div>
+          <div class="num">
+            <input type="number" min="0" max="100" value="${wert}" data-aus="${esc(c.id)}"
+              ${hat ? "" : 'style="opacity:.55"'}>
+            <span class="unit">%</span>
+          </div>
+          <div>${
+            hat
+              ? `<span class="chip warn">Ausnahme</span>`
+              : `<span class="ent">folgt der Rolle (${Math.round(ausRolle * 100)} %)</span>`
+          }</div>
+          <button class="del" data-ausweg="${esc(c.id)}" title="Ausnahme aufheben"
+            ${hat ? "" : 'style="opacity:.3"'}>×</button>
+        </div>`;
       })
       .join("");
 
     return `<h2>Szenen</h2>
-      <p class="sub">Alle Lichtstimmungen dieser Zone. Beim Bearbeiten zeigen die Regler
-        die Szenenwerte und schalten live mit.</p>
+      <p class="sub">Eine Szene wird in Ebenen eingestellt. Einzelne Leuchten können abweichen.</p>
       ${this._zonePicker()}
-      <div class="slist">${scenes || `<div class="empty">Noch keine Szenen.</div>`}</div>
+      <div class="slist">${scenes}</div>
+
+      <div class="sec">„${esc(editing.name)}“ — Ebenen</div>
+      <div class="faders">${rollenRegler}</div>
+      <p class="hint">Ein Regler stellt alle Leuchten dieser Aufgabe zugleich.
+        Kommt später eine Leuchte dazu, ist sie automatisch dabei.</p>
+
       <div class="row">
-        <button class="btn pri" data-act="suggest">Szenen vorschlagen</button>
-        <button class="btn" data-act="new-scene">Aktuelles Licht als neue Szene</button>
+        <button class="btn pri" data-act="save-scene" ${this._dirty ? "" : "disabled"}>
+          ${this._dirty ? "Szene speichern" : "gespeichert"}</button>
+        <button class="btn" data-act="cancel-edit">Bearbeiten beenden</button>
+        <button class="btn" data-act="snapshot">Ist-Zustand übernehmen</button>
+        <button class="btn ${this._showOverrides ? "on" : ""}" data-act="toggle-overrides">
+          Einzelne Leuchten${
+            Object.keys(ausnahmen).length ? ` (${Object.keys(ausnahmen).length})` : ""
+          }</button>
+        ${this._busy ? `<span class="chip warn">${esc(this._busy)}</span>` : ""}
       </div>
 
-      <div class="sec">Regler${editing ? ` — „${esc(editing.name)}“` : " — Live"}</div>
-      <div class="faders">${faders}</div>
-      <div class="row">
-        ${
-          editing
-            ? `<button class="btn pri" data-act="save-scene" ${this._dirty ? "" : "disabled"}>
-                 ${this._dirty ? "Szene speichern" : "gespeichert"}</button>
-               <button class="btn" data-act="cancel-edit">Bearbeiten beenden</button>
-               <button class="btn" data-act="snapshot">Ist-Zustand übernehmen</button>`
-            : `<button class="btn" data-act="off">Zone aus</button>`
-        }
-        ${this._busy ? `<span class="chip warn">${esc(this._busy)}</span>` : ""}
-      </div>`;
+      ${
+        this._showOverrides
+          ? `<div class="sec">Abweichende Leuchten</div>
+             <p class="hint" style="margin-bottom:10px">Eine Zahl eintragen macht die Leuchte
+               zur Ausnahme; 0 nimmt sie aus der Szene heraus. Das × stellt sie zurück
+               auf ihren Rollenwert.</p>
+             ${ausnahmeZeilen}`
+          : ""
+      }`;
+  }
+
+  // Sollwerte je Lichtkreis — dieselbe Rechnung wie im Kern.
+  _sceneLevels(zone, scene) {
+    const out = {};
+    for (const c of zone.circuits || []) {
+      if (!c.enabled) continue;
+      const eigene = c.roles && c.roles.length ? c.roles : [c.role];
+      let wert;
+      if (scene.overrides && Object.prototype.hasOwnProperty.call(scene.overrides, c.id)) {
+        wert = scene.overrides[c.id];
+      } else {
+        wert = Math.max(...eigene.map((r) => (scene.levels || {})[r] ?? 0), 0);
+      }
+      if (wert > 0) out[c.id] = wert;
+    }
+    return out;
   }
 
   // -- Steuerung ------------------------------------------------------------
@@ -1420,7 +1501,7 @@ class LichtregiePanel extends HTMLElement {
       "[data-nav],[data-zone],[data-scene],[data-act],[data-release]," +
         "[data-control],[data-template],[data-delbind],[data-curve],[data-toggle],[data-calibrate]," +
         "[data-edit],[data-delscene],[data-lampflag],[data-delmo],[data-delta]," +
-        "[data-lampdlg],[data-close],[data-stop],[data-dlgicon],[data-dlgrole]," +
+        "[data-lampdlg],[data-close],[data-stop],[data-dlgicon],[data-dlgrole],[data-ausweg]," +
         "[data-dlgflag],[data-dlgenabled],[data-dlgdelete],[data-addlight]"
     );
     if (!target) return;
@@ -1518,6 +1599,13 @@ class LichtregiePanel extends HTMLElement {
       ).leuchten;
       return this._render();
     }
+    if (target.dataset.ausweg) {
+      const ausnahmen = { ...(this._draft.overrides || {}) };
+      delete ausnahmen[target.dataset.ausweg];
+      this._draft.overrides = ausnahmen;
+      this._dirty = true;
+      return this._render();
+    }
     if (target.dataset.lampflag) {
       const zone = this.zoneConfig(this._zoneId);
       const circuit = (zone.circuits || []).find((c) => c.id === target.dataset.lampflag);
@@ -1552,6 +1640,7 @@ class LichtregiePanel extends HTMLElement {
       this._editScene = this._editScene === target.dataset.edit ? null : target.dataset.edit;
       this._dirty = false;
       this._draft = {};
+      this._busy = "";
       return this._render();
     }
     if (target.dataset.delscene) {
@@ -1687,22 +1776,24 @@ class LichtregiePanel extends HTMLElement {
         return void this._call("lichtregie/zone/off", { zone_id: this._zoneId });
       case "next":
         return void this._call("lichtregie/zone/next", { zone_id: this._zoneId });
+      case "toggle-overrides":
+        this._showOverrides = !this._showOverrides;
+        return this._render();
       case "save-scene": {
         const zone = this.zoneConfig(this._zoneId);
         const scene = (zone.scenes || []).find((sc) => sc.id === this._editScene);
         if (!scene) return;
-        const steps = Object.entries(this._draft)
-          .filter(([, level]) => level > 0)
-          .map(([circuit_id, level]) => {
-            const old = (scene.steps || []).find((st) => st.circuit_id === circuit_id);
-            return { circuit_id, level, kelvin: old ? old.kelvin : null };
-          });
         await this._call("lichtregie/scene/set", {
           zone_id: this._zoneId,
-          scene: { ...scene, steps },
+          scene: {
+            ...scene,
+            levels: this._draft.levels || scene.levels,
+            overrides: this._draft.overrides || scene.overrides,
+          },
         });
         this._config = await this._call("lichtregie/config/get");
         this._dirty = false;
+        this._draft = {};
         this._busy = "Szene gespeichert.";
         return this._render();
       }
@@ -1718,16 +1809,16 @@ class LichtregiePanel extends HTMLElement {
         const snapshot = await this._call("lichtregie/scene/snapshot", {
           zone_id: this._zoneId,
         });
-        const steps = Object.entries(snapshot.levels || {})
-          .filter(([, level]) => level > 0)
-          .map(([circuit_id, level]) => ({
-            circuit_id,
-            level,
-            kelvin: (snapshot.kelvin || {})[circuit_id] || null,
-          }));
         const answer = await this._call("lichtregie/scene/set", {
           zone_id: this._zoneId,
-          scene: { id: "", name, steps, fade: 1.5 },
+          scene: {
+            id: "",
+            name,
+            levels: snapshot.levels || {},
+            overrides: snapshot.overrides || {},
+            kelvin: snapshot.kelvin || null,
+            fade: 1.5,
+          },
         });
         this._config = await this._call("lichtregie/config/get");
         this._editScene = answer.scene ? answer.scene.id : null;
@@ -1739,7 +1830,10 @@ class LichtregiePanel extends HTMLElement {
         const snapshot = await this._call("lichtregie/scene/snapshot", {
           zone_id: this._zoneId,
         });
-        this._draft = snapshot.levels || {};
+        this._draft = {
+          levels: snapshot.levels || {},
+          overrides: snapshot.overrides || {},
+        };
         this._dirty = !!this._editScene;
         this._busy = this._editScene
           ? "Ist-Zustand übernommen — noch nicht gespeichert."
@@ -1852,6 +1946,38 @@ class LichtregiePanel extends HTMLElement {
     this._render();
   }
 
+  _aktuelleOverrides() {
+    const zone = this.zoneConfig(this._zoneId);
+    const scene = (zone.scenes || []).find((sc) => sc.id === this._editScene);
+    return { ...((scene && scene.overrides) || {}) };
+  }
+
+  _aktuelleLevels() {
+    const zone = this.zoneConfig(this._zoneId);
+    const scene = (zone.scenes || []).find((sc) => sc.id === this._editScene);
+    return { ...((scene && scene.levels) || {}) };
+  }
+
+  // Schickt das aktuelle Bild an die Leuchten, aber höchstens alle 250 ms.
+  _vorschau() {
+    if (this._vorschauTimer) return;
+    this._vorschauTimer = setTimeout(() => {
+      this._vorschauTimer = null;
+      const zone = this.zoneConfig(this._zoneId);
+      const scene = (zone.scenes || []).find((sc) => sc.id === this._editScene);
+      if (!zone || !scene) return;
+      const entwurf = {
+        ...scene,
+        levels: this._draft.levels || scene.levels,
+        overrides: this._draft.overrides || scene.overrides,
+      };
+      this._call("lichtregie/scene/preview", {
+        zone_id: zone.id,
+        levels: this._sceneLevels(zone, entwurf),
+      });
+    }, 250);
+  }
+
   _activeControlId() {
     const geraete = this.controls.filter((c) => c.zone_id === this._zoneId);
     if (this._controlId && geraete.some((c) => c.id === this._controlId)) {
@@ -1922,6 +2048,26 @@ class LichtregiePanel extends HTMLElement {
   }
 
   _onInput(ev) {
+    const rolle = ev.target.closest("input[data-rolle]");
+    if (rolle) {
+      const wert = Number(rolle.value);
+      const anzeige = this.shadowRoot.querySelector(`[data-rval="${rolle.dataset.rolle}"]`);
+      if (anzeige) anzeige.textContent = wert ? `${wert} %` : "aus";
+      const levels = { ...(this._draft.levels || this._aktuelleLevels()) };
+      levels[rolle.dataset.rolle] = wert / 100;
+      this._draft = { ...this._draft, levels };
+      if (!this._dirty) {
+        this._dirty = true;
+        const knopf = this.shadowRoot.querySelector('[data-act="save-scene"]');
+        if (knopf) {
+          knopf.removeAttribute("disabled");
+          knopf.textContent = "Szene speichern";
+        }
+      }
+      this._vorschau();
+      return;
+    }
+
     const slider = ev.target.closest("input[data-circuit]");
     if (!slider) return;
     const label = this.shadowRoot.querySelector(`[data-val="${slider.dataset.circuit}"]`);
@@ -1941,6 +2087,16 @@ class LichtregiePanel extends HTMLElement {
   }
 
   async _onChange(ev) {
+    const aus = ev.target.closest("input[data-aus]");
+    if (aus) {
+      const ausnahmen = { ...(this._draft.overrides || this._aktuelleOverrides()) };
+      ausnahmen[aus.dataset.aus] = Math.min(100, Math.max(0, Number(aus.value))) / 100;
+      this._draft = { ...this._draft, overrides: ausnahmen };
+      this._dirty = true;
+      this._vorschau();
+      return this._render();
+    }
+
     const dlgName = ev.target.closest('[data-dlg="name"]');
     if (dlgName) {
       await this._call("lichtregie/circuit/set", {

@@ -629,6 +629,15 @@ async def ws_scene_set(hass, connection, msg) -> None:
     if not data.get("id"):
         data["id"] = zone.new_scene_id()
     scene = Scene.from_dict(data)
+    # Ausnahmen, die dem Rollenwert entsprechen, sind keine — sonst wächst
+    # die Liste bei jedem Speichern.
+    scene.overrides = {
+        cid: wert
+        for cid, wert in scene.overrides.items()
+        if (circuit := zone.circuit(cid)) is not None
+        and abs(wert - max([scene.levels.get(r, 0.0) for r in circuit.roles] or [0.0]))
+        > 0.001
+    }
 
     for index, existing in enumerate(zone.scenes):
         if existing.id == scene.id:
@@ -690,13 +699,32 @@ async def ws_scene_delete(hass, connection, msg) -> None:
 @websocket_api.require_admin
 @callback
 def ws_scene_snapshot(hass, connection, msg) -> None:
-    """Liest den Ist-Zustand der Zone als Sollwerte zurück."""
+    """Liest den Ist-Zustand der Zone zurück — je Kreis und je Rolle.
+
+    Die Rollenwerte sind der Vorschlag für eine neue Szene, die Kreiswerte
+    dienen als Ausnahmen für alles, was davon abweicht.
+    """
+    from ..core.migrate import scene_from_steps
+
     engine = _engine(hass)
+    zone = _store(hass).installation.zone(msg["zone_id"])
+    je_kreis = engine.snapshot_levels(msg["zone_id"])
+    kelvin = engine.snapshot_kelvin(msg["zone_id"])
+
+    levels, overrides = {}, {}
+    if zone is not None:
+        steps = [{"circuit_id": k, "level": v} for k, v in je_kreis.items()]
+        levels, overrides, _ = scene_from_steps(
+            steps, [c.to_dict() for c in zone.circuits]
+        )
+
     connection.send_result(
         msg["id"],
         {
-            "levels": engine.snapshot_levels(msg["zone_id"]),
-            "kelvin": engine.snapshot_kelvin(msg["zone_id"]),
+            "levels": levels,
+            "overrides": overrides,
+            "kreise": je_kreis,
+            "kelvin": next(iter(kelvin.values()), None) if kelvin else None,
         },
     )
 
@@ -891,11 +919,11 @@ async def ws_circuit_delete(hass, connection, msg) -> None:
         connection.send_result(msg["id"], {"ok": False})
         return
 
-    # Der Kreis darf nicht als Leiche in den Szenen zurückbleiben.
+    # Die Ausnahme dieses Kreises darf nicht als Leiche zurückbleiben.
     leer = 0
     for scene in zone.scenes:
-        scene.steps = [s for s in scene.steps if s.circuit_id != msg["circuit_id"]]
-        if not scene.steps:
+        scene.overrides.pop(msg["circuit_id"], None)
+        if not scene.resolve(zone):
             leer += 1
 
     await store.save(label=f"Lichtkreis entfernt in {zone.name}")

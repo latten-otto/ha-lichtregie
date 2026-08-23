@@ -13,8 +13,13 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
+import logging
+
 from .const import STORAGE_KEY, STORAGE_VERSION
+from .core.migrate import migrate_installation
 from .core.model import Installation
+
+_LOGGER = logging.getLogger(__name__)
 
 KEEP_REVISIONS = 20
 RUNTIME_KEY = "lichtregie.runtime"
@@ -31,8 +36,15 @@ class ConfigStore:
     async def load(self) -> Installation:
         data = await self._store.async_load()
         if data:
-            self.installation = Installation.from_dict(data.get("installation", {}))
+            roh = data.get("installation", {})
+            roh, umgerechnet = migrate_installation(roh)
+            self.installation = Installation.from_dict(roh)
             self._revisions = data.get("revisions", [])
+            if umgerechnet:
+                _LOGGER.info(
+                    "%s Szene(n) auf Rollenwerte umgerechnet", umgerechnet
+                )
+                await self.save(label="Szenen auf Rollenwerte umgestellt")
         return self.installation
 
     async def save(self, label: str = "", author: str = "") -> None:
