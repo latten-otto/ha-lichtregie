@@ -136,6 +136,12 @@ select:focus,input:focus{outline:1px solid var(--amber);outline-offset:1px}
 .lamp.head{background:#12141A;border-color:#12141A;font-size:10px;text-transform:uppercase;
   letter-spacing:.1em;color:var(--faint);padding:7px 11px}
 .lamp.off{opacity:.5}
+.lamp[data-lampdlg]{cursor:pointer}
+.lamp[data-lampdlg]:hover{border-color:#3A404C;background:var(--panel2)}
+.lamp[data-lampdlg]:hover .nam{text-decoration:underline;text-underline-offset:2px}
+.lamp .nam{font-weight:600}
+/* Bedienelemente in der Zeile öffnen den Dialog nicht. */
+.lamp select,.lamp input,.lamp .toggle{cursor:auto}
 .lamp .lname{font-size:13px;font-weight:600}
 .lamp .lent{font-family:ui-monospace,monospace;font-size:10.5px;color:var(--faint)}
 .lamp .num{display:flex;align-items:center;gap:5px}
@@ -610,12 +616,12 @@ class LichtregiePanel extends HTMLElement {
         const eigene = circuit.roles && circuit.roles.length ? circuit.roles : [circuit.role];
         const haupt = eigene[0];
         const symbol = circuit.icon || ROLE_DEFAULT_ICON[haupt] || "💡";
-        return `<div class="lamp ${circuit.enabled ? "" : "off"}">
+        return `<div class="lamp ${circuit.enabled ? "" : "off"}"
+            data-lampdlg="${esc(circuit.id)}" title="Einstellungen öffnen">
           <div>
             <div class="lname">
               <span class="sym">${esc(symbol)}</span>
-              <button class="btn" data-lampdlg="${esc(circuit.id)}"
-                style="border:0;background:none;padding:0;font-weight:600">${esc(circuit.name)}</button>
+              <span class="nam">${esc(circuit.name)}</span>
               ${f.dimmable ? "" : `<span class="kann">· nicht dimmbar</span>`}
             </div>
             <div class="lent">${esc(f.entity_id || "")}${
@@ -1513,6 +1519,8 @@ class LichtregiePanel extends HTMLElement {
       return this._render();
     }
     if (target.dataset.lampdlg) {
+      // Auswahlfelder, Zahlen und Schalter in der Zeile bedienen sich selbst.
+      if (ev.target.closest("select,input,.toggle,[data-lampflag]")) return;
       this._dialog = target.dataset.lampdlg;
       return this._render();
     }
