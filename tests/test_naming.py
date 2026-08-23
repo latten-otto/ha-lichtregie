@@ -145,6 +145,17 @@ def test_echte_leuchte_ist_keine_gruppe():
     assert is_group(Zustand(), None) is False
 
 
+def test_gruppe_ueber_die_integration():
+    """Kurz nach dem Start ist die Mitgliederliste noch leer.
+
+    Dann bliebe die Gruppe unerkannt und würde als eigener Lichtkreis
+    angelegt — die Integration der Entität verrät sie trotzdem.
+    """
+    assert is_group(Zustand(), None, platform="group") is True
+    assert is_group(Zustand(), None, platform="light_group") is True
+    assert is_group(Zustand(), None, platform="hue") is False
+
+
 def test_leere_mitgliederliste_ist_keine_gruppe():
     """Ein leeres Attribut zählt nicht — sonst fielen echte Leuchten heraus."""
     assert is_group(Zustand(entity_id=[]), None) is False

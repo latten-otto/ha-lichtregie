@@ -337,7 +337,7 @@ async def discover(hass: HomeAssistant, rate_sensors: bool = True) -> Installati
                 if entry and entry.device_id
                 else None
             )
-            if is_group(state, device):
+            if is_group(state, device, entry.platform if entry else None):
                 _LOGGER.debug("%s übersprungen: ist eine Gruppe", entity_id)
                 continue
 

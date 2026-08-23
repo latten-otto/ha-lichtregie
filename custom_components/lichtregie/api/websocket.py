@@ -935,7 +935,7 @@ def ws_free_lights(hass, connection, msg) -> None:
             if entry and entry.device_id
             else None
         )
-        if is_group(state, device):
+        if is_group(state, device, entry.platform if entry else None):
             continue
         im_bereich = bool(
             zone

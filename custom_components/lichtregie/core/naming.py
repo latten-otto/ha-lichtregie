@@ -153,7 +153,7 @@ def guess_role(name: str, capabilities: dict[str, Any]) -> str:
     return ROLE_GENERAL
 
 
-def is_group(state, device) -> bool:
+def is_group(state, device, platform: str | None = None) -> bool:
     """Wahr, wenn diese Leuchte in Wirklichkeit eine Gruppe ist.
 
     Gruppen dürfen nicht als Lichtkreis auftauchen: sie steuern dieselben
@@ -165,6 +165,11 @@ def is_group(state, device) -> bool:
     Zigbee-Integration, die als eigenes Gerät mit dem Modell „deCONZ group"
     im Register stehen.
     """
+    # Die Mitgliederliste ist der sicherste Hinweis — aber erst gefüllt,
+    # wenn alle Mitglieder geladen sind. Kurz nach dem Start ist sie leer,
+    # deshalb zählt die Integration der Entität ebenso.
+    if platform and platform in ("group", "light_group"):
+        return True
     if state is not None and state.attributes.get("entity_id"):
         return True
     if device is not None and "group" in (device.model or "").lower():
