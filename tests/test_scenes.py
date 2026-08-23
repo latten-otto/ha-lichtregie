@@ -106,6 +106,30 @@ def test_night_scene_falls_back_to_ambient():
     assert step.level <= 0.05
 
 
+def test_mehrere_rollen_je_kreis():
+    """Die Dekolampe ist Akzent und nachts Orientierung."""
+    zone = living_room()
+    deko = zone.circuits[2]
+    deko.roles = [ACCENT, NIGHT]
+    scenes = {s.id: s for s in suggest_scenes(zone)}
+    # Als Orientierung trägt sie die Nachtszene …
+    assert scenes["nachtgang"].level_of(deko.id) > 0
+    # … und als Akzent das Fernsehen.
+    assert scenes["fernsehen"].level_of(deko.id) > 0
+
+
+def test_kreis_erscheint_nur_einmal_je_szene():
+    """Trifft eine Szene zwei Rollen desselben Kreises, gilt der höhere Wert."""
+    zone = living_room()
+    kreis = zone.circuits[1]
+    kreis.roles = [AMBIENT, ACCENT]
+    szene = {s.id: s for s in suggest_scenes(zone)}["entspannen"]
+    treffer = [st for st in szene.steps if st.circuit_id == kreis.id]
+    assert len(treffer) == 1
+    # Akzent (0.60) schlägt Stimmung (0.45)
+    assert treffer[0].level == 0.6
+
+
 def test_suggestions_never_overwrite():
     zone = living_room()
     zone.scenes = suggest_scenes(zone)

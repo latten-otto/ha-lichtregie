@@ -12,6 +12,7 @@ from typing import Any
 import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from ..const import DOMAIN
 from ..core.bindings import TEMPLATES, apply_template, describe
@@ -64,6 +65,9 @@ def async_register(hass: HomeAssistant) -> None:
         ws_scene_snapshot,
         ws_circuit_set,
         ws_fixture_set,
+        ws_circuit_add,
+        ws_circuit_delete,
+        ws_free_lights,
     ):
         websocket_api.async_register_command(hass, handler)
 
@@ -708,7 +712,9 @@ def ws_scene_snapshot(hass, connection, msg) -> None:
         vol.Required("zone_id"): str,
         vol.Required("circuit_id"): str,
         vol.Optional("role"): str,
+        vol.Optional("roles"): [str],
         vol.Optional("name"): str,
+        vol.Optional("icon"): str,
         vol.Optional("enabled"): bool,
     }
 )
@@ -723,14 +729,17 @@ async def ws_circuit_set(hass, connection, msg) -> None:
         connection.send_error(msg["id"], "unbekannt", "Lichtkreis nicht gefunden")
         return
 
-    for feld in ("role", "name", "enabled"):
+    if "roles" in msg:
+        circuit.roles = [r for r in msg["roles"] if r] or ["general"]
+    for feld in ("role", "name", "icon", "enabled"):
         if feld in msg:
             setattr(circuit, feld, msg[feld])
 
-    # Nachtfähigkeit folgt der Rolle, solange sie nicht von Hand gesetzt ist.
-    if "role" in msg:
+    # Nachtfähigkeit folgt den Rollen, bis sie von Hand gesetzt wird.
+    if "role" in msg or "roles" in msg:
+        nachtfaehig = any(r in ("night", "ambient") for r in circuit.roles)
         for fixture in circuit.fixtures:
-            fixture.night_capable = circuit.role in ("night", "ambient")
+            fixture.night_capable = nachtfaehig
 
     await store.save(label=f"Lichtkreis {circuit.name}")
     _engine(hass).rebuild()
@@ -806,3 +815,141 @@ def _usable_steps(fixture) -> int:
     from ..core.photometry import usable_steps
 
     return usable_steps(fixture.curve, fixture.min_flux, fixture.max_flux)
+
+
+# --------------------------------------------------------------------------
+# Lichtkreise anlegen und entfernen
+# --------------------------------------------------------------------------
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "lichtregie/circuit/add",
+        vol.Required("zone_id"): str,
+        vol.Required("entity_id"): str,
+        vol.Optional("name"): str,
+        vol.Optional("roles"): [str],
+    }
+)
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_circuit_add(hass, connection, msg) -> None:
+    """Nimmt eine weitere Leuchte in eine Zone auf."""
+    from ..core.model import Circuit, Fixture
+    from ..core.naming import guess_role
+    from ..link.discovery import read_capabilities
+
+    store = _store(hass)
+    zone = store.installation.zone(msg["zone_id"])
+    if zone is None:
+        connection.send_error(msg["id"], "unbekannt", "Zone nicht gefunden")
+        return
+
+    entity_id = msg["entity_id"]
+    if any(entity_id in c.entity_ids for c in zone.circuits):
+        connection.send_error(msg["id"], "doppelt", "Leuchte ist bereits in dieser Zone")
+        return
+
+    state = hass.states.get(entity_id)
+    name = msg.get("name") or (state.name if state else entity_id)
+    caps = read_capabilities(state)
+    fixture = Fixture(entity_id=entity_id, name=name, **caps)
+
+    rollen = msg.get("roles") or [guess_role(name, caps)]
+    fixture.night_capable = any(r in ("night", "ambient") for r in rollen)
+
+    circuit = Circuit(
+        id=zone.new_circuit_id(), name=name, roles=rollen, fixtures=[fixture]
+    )
+    zone.circuits.append(circuit)
+
+    await store.save(label=f"{name} zu {zone.name}")
+    _engine(hass).rebuild()
+    connection.send_result(msg["id"], {"ok": True, "circuit": circuit.to_dict()})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "lichtregie/circuit/delete",
+        vol.Required("zone_id"): str,
+        vol.Required("circuit_id"): str,
+    }
+)
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_circuit_delete(hass, connection, msg) -> None:
+    """Entfernt einen Lichtkreis und räumt die Szenen auf."""
+    store = _store(hass)
+    zone = store.installation.zone(msg["zone_id"])
+    if zone is None:
+        connection.send_error(msg["id"], "unbekannt", "Zone nicht gefunden")
+        return
+
+    vorher = len(zone.circuits)
+    zone.circuits = [c for c in zone.circuits if c.id != msg["circuit_id"]]
+    if len(zone.circuits) == vorher:
+        connection.send_result(msg["id"], {"ok": False})
+        return
+
+    # Der Kreis darf nicht als Leiche in den Szenen zurückbleiben.
+    leer = 0
+    for scene in zone.scenes:
+        scene.steps = [s for s in scene.steps if s.circuit_id != msg["circuit_id"]]
+        if not scene.steps:
+            leer += 1
+
+    await store.save(label=f"Lichtkreis entfernt in {zone.name}")
+    _engine(hass).rebuild()
+    connection.send_result(msg["id"], {"ok": True, "leere_szenen": leer})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "lichtregie/lights/free",
+        vol.Optional("zone_id"): str,
+    }
+)
+@callback
+def ws_free_lights(hass, connection, msg) -> None:
+    """Leuchten, die noch keiner Zone zugeordnet sind.
+
+    Dazu die des Bereichs, der zur Zone gehört, damit man nicht durch alle
+    45 Einträge blättern muss.
+    """
+    from ..core.naming import is_group
+
+    belegt = {
+        entity_id
+        for zone in _store(hass).installation.zones
+        for entity_id in zone.entity_ids
+    }
+    zone = _store(hass).installation.zone(msg.get("zone_id", ""))
+
+    frei = []
+    for state in hass.states.async_all("light"):
+        if state.entity_id in belegt:
+            continue
+        entry = er.async_get(hass).async_get(state.entity_id)
+        device = (
+            dr.async_get(hass).async_get(entry.device_id)
+            if entry and entry.device_id
+            else None
+        )
+        if is_group(state, device):
+            continue
+        im_bereich = bool(
+            zone
+            and entry
+            and (entry.area_id == zone.area_id
+                 or (device is not None and device.area_id == zone.area_id))
+        )
+        frei.append(
+            {
+                "entity_id": state.entity_id,
+                "name": state.name,
+                "im_bereich": im_bereich,
+            }
+        )
+
+    frei.sort(key=lambda x: (not x["im_bereich"], x["name"]))
+    connection.send_result(msg["id"], {"leuchten": frei})

@@ -1,7 +1,7 @@
 {
   "domain": "lichtregie",
   "name": "Lichtregie",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "documentation": "https://github.com/latten-otto/ha-lichtregie",
   "issue_tracker": "https://github.com/latten-otto/ha-lichtregie/issues",
   "codeowners": [

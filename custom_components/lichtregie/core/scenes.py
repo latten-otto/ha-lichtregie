@@ -179,23 +179,22 @@ def suggest_scenes(zone: Zone) -> list[Scene]:
         if missing:
             continue
 
-        steps: list[SceneStep] = []
+        # Ein Kreis kann mehrere Rollen haben und damit von mehreren
+        # Anteilen einer Szene getroffen werden — dann gilt der höchste.
+        werte: dict[str, float] = {}
         for role, level in intent.levels.items():
             circuits, factor = _role_target(zone, role)
             for circuit in circuits:
                 value = round(min(1.0, level * factor), 3)
-                if value > 0:
-                    steps.append(
-                        SceneStep(
-                            circuit_id=circuit.id,
-                            level=value,
-                            kelvin=(
-                                None
-                                if intent.kelvin == KELVIN_DAYLIGHT
-                                else int(intent.kelvin)
-                            ),
-                        )
-                    )
+                if value > werte.get(circuit.id, 0.0):
+                    werte[circuit.id] = value
+
+        kelvin = None if intent.kelvin == KELVIN_DAYLIGHT else int(intent.kelvin)
+        steps = [
+            SceneStep(circuit_id=cid, level=value, kelvin=kelvin)
+            for cid, value in werte.items()
+            if value > 0
+        ]
         if not steps:
             continue
 

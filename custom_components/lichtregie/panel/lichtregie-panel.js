@@ -143,6 +143,36 @@ select:focus,input:focus{outline:1px solid var(--amber);outline-offset:1px}
 .lamp .unit{font-family:ui-monospace,monospace;font-size:11px;color:var(--faint)}
 .lamp .kann{font-size:11px;color:var(--faint)}
 .zonebar{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:6px}
+.overlay{position:fixed;inset:0;background:rgba(6,7,9,.72);display:flex;align-items:center;
+  justify-content:center;z-index:50;padding:20px}
+.dialog{background:var(--panel);border:1px solid var(--line);border-radius:12px;width:min(560px,100%);
+  max-height:88vh;overflow:auto;box-shadow:0 24px 60px rgba(0,0,0,.6)}
+.dialog header{display:flex;align-items:center;gap:12px;padding:16px 20px;border-bottom:1px solid var(--line)}
+.dialog header .ic{width:38px;height:38px;border-radius:9px;background:var(--panel2);
+  display:flex;align-items:center;justify-content:center;font-size:19px;flex:0 0 auto}
+.dialog header h3{margin:0;font-size:15px;font-weight:600}
+.dialog header .ent{font-family:ui-monospace,monospace;font-size:11px;color:var(--faint)}
+.dialog header .x{margin-left:auto;font-size:20px;color:var(--faint);padding:0 4px}
+.dialog header .x:hover{color:var(--ink)}
+.dialog .dlgbody{padding:18px 20px}
+.dialog footer{display:flex;gap:9px;padding:14px 20px;border-top:1px solid var(--line);align-items:center}
+.dialog footer .weg{margin-left:auto;color:var(--red);border-color:#4A2A26}
+.feld{margin-bottom:16px}
+.feld label{display:block;font-size:10.5px;text-transform:uppercase;letter-spacing:.1em;
+  color:var(--faint);margin-bottom:6px}
+.feld input[type=text],.feld select{width:100%}
+.feld .zeile{display:flex;gap:9px;align-items:center}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chipbtn{padding:6px 12px;border-radius:100px;border:1px solid var(--line);font-size:12.5px;
+  color:var(--soft);background:var(--panel2)}
+.chipbtn.on{border-color:var(--amber);color:var(--amber);background:#221A0F}
+.chipbtn.haupt::after{content:" · Haupt";font-size:10px;opacity:.8}
+.iconwahl{display:flex;gap:6px;flex-wrap:wrap}
+.iconbtn{width:36px;height:36px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);
+  font-size:17px;display:flex;align-items:center;justify-content:center}
+.iconbtn.on{border-color:var(--amber);background:#221A0F}
+.lamp .sym{font-size:16px;margin-right:8px}
+.lamp .rollen{font-size:10px;color:var(--faint);letter-spacing:.03em}
 .rule{display:grid;grid-template-columns:minmax(150px,1.2fr) minmax(140px,1fr) 120px 130px 30px;
   gap:8px;align-items:center;padding:8px 11px;border-radius:7px;border:1px solid var(--line);
   background:var(--panel);margin-bottom:5px}
@@ -167,6 +197,17 @@ select:focus,input:focus{outline:1px solid var(--amber);outline-offset:1px}
   nav button.on{border-left:0;border-bottom-color:var(--amber)}
 }
 `;
+
+const ROLE_ICONS = ["💡", "🔆", "🛋", "🕯", "🌙", "🎨", "🔦", "🖼", "🪞", "🍽", "🛏", "🚿"];
+
+const ROLE_DEFAULT_ICON = {
+  general: "💡",
+  task: "🔆",
+  ambient: "🛋",
+  accent: "🕯",
+  night: "🌙",
+  effect: "🎨",
+};
 
 const ROLE_LABEL = {
   general: "Grund",
@@ -207,6 +248,8 @@ class LichtregiePanel extends HTMLElement {
     this._editScene = null;
     this._dirty = false;
     this._draft = {};
+    this._dialog = null;
+    this._freeLights = null;
     this._busy = "";
     this._bound = false;
     this._ready = false;
@@ -323,7 +366,14 @@ class LichtregiePanel extends HTMLElement {
           ${this._navButton("anlage", "Anlage")}
         </nav>
         <main>${this._viewHtml()}</main>
-      </div>`;
+      </div>
+      ${
+        this._dialog === "add"
+          ? this._addDialogHtml()
+          : this._dialog
+          ? this._lampDialogHtml()
+          : ""
+      }`;
 
     if (!this._bound) {
       // Genau einmal binden. Der Container bleibt über alle Renderdurchläufe
@@ -555,18 +605,31 @@ class LichtregiePanel extends HTMLElement {
         const fuehrtFarbe = f.manage_color !== false;
         const max = Math.round((f.max_flux ?? 1) * 100);
         const min = Math.round((f.min_flux ?? 0.01) * 100);
-        return `<div class="lamp ${circuit.enabled ? "" : "off"}" data-circuit-row="${esc(circuit.id)}">
+        // Nicht "rollen" nennen — das ist oben die Liste aller Auswahlmöglichkeiten.
+        const eigene = circuit.roles && circuit.roles.length ? circuit.roles : [circuit.role];
+        const haupt = eigene[0];
+        const symbol = circuit.icon || ROLE_DEFAULT_ICON[haupt] || "💡";
+        return `<div class="lamp ${circuit.enabled ? "" : "off"}">
           <div>
-            <div class="lname">${esc(circuit.name)}${
-              f.dimmable ? "" : ` <span class="kann">· nicht dimmbar</span>`
+            <div class="lname">
+              <span class="sym">${esc(symbol)}</span>
+              <button class="btn" data-lampdlg="${esc(circuit.id)}"
+                style="border:0;background:none;padding:0;font-weight:600">${esc(circuit.name)}</button>
+              ${f.dimmable ? "" : `<span class="kann">· nicht dimmbar</span>`}
+            </div>
+            <div class="lent">${esc(f.entity_id || "")}${
+              eigene.length > 1
+                ? ` · <span class="rollen">${eigene
+                    .map((r) => esc(ROLE_LABEL[r] || r))
+                    .join(" + ")}</span>`
+                : ""
             }</div>
-            <div class="lent">${esc(f.entity_id || "")}</div>
           </div>
           <select data-lamp="${esc(circuit.id)}" data-field="role">
             ${rollen
               .map(
                 ([v, l]) =>
-                  `<option value="${v}" ${v === circuit.role ? "selected" : ""}>${l}</option>`
+                  `<option value="${v}" ${v === haupt ? "selected" : ""}>${l}</option>`
               )
               .join("")}
           </select>
@@ -609,6 +672,10 @@ class LichtregiePanel extends HTMLElement {
         <span>Maximum</span><span>Minimum</span><span>Blendung</span>
       </div>
       ${zeilen || `<div class="empty">Keine Leuchten in dieser Zone.</div>`}
+      <div class="row">
+        <button class="btn" data-act="add-light">Leuchte hinzufügen</button>
+        <span class="ent">Auf einen Namen klicken öffnet alle Einstellungen.</span>
+      </div>
       <p class="hint">
         <b>Maximum</b> ist das, was ein Sollwert von 100 % ausmacht — stehen deine Leuchten
         nie über 40 %, trägst du hier 40 ein, und „volle Szene" heißt danach genau das.<br>
@@ -617,6 +684,156 @@ class LichtregiePanel extends HTMLElement {
         <b>Blendung</b> sperrt die Leuchte im Nachtfenster.
       </p>
       ${this._busy ? `<div class="row"><span class="chip warn">${esc(this._busy)}</span></div>` : ""}`;
+  }
+
+  // -- Dialog: eine Leuchte -------------------------------------------------
+
+  _lampDialogHtml() {
+    const zone = this.zoneConfig(this._zoneId);
+    const circuit = (zone.circuits || []).find((c) => c.id === this._dialog);
+    if (!circuit) return "";
+    const f = (circuit.fixtures || [])[0] || {};
+    const rollen = circuit.roles && circuit.roles.length ? circuit.roles : [circuit.role];
+    const symbol = circuit.icon || ROLE_DEFAULT_ICON[rollen[0]] || "💡";
+    const kannFarbe = f.color_temp || f.color;
+
+    const alleRollen = [
+      ["general", "Deckenlicht"],
+      ["task", "Arbeitslicht"],
+      ["ambient", "Stimmungslicht"],
+      ["accent", "Akzentlicht"],
+      ["night", "Orientierung"],
+      ["effect", "kein Raumlicht"],
+    ];
+
+    return `<div class="overlay" data-close="1">
+      <div class="dialog" data-stop="1">
+        <header>
+          <span class="ic">${esc(symbol)}</span>
+          <div>
+            <h3>${esc(circuit.name)}</h3>
+            <div class="ent">${esc(f.entity_id || "")}</div>
+          </div>
+          <button class="x" data-close="1" title="Schließen">×</button>
+        </header>
+        <div class="dlgbody">
+          <div class="feld">
+            <label>Name</label>
+            <input type="text" value="${esc(circuit.name)}" data-dlg="name">
+          </div>
+
+          <div class="feld">
+            <label>Symbol</label>
+            <div class="iconwahl">
+              ${ROLE_ICONS.map(
+                (i) =>
+                  `<button class="iconbtn ${i === symbol ? "on" : ""}" data-dlgicon="${esc(i)}">${i}</button>`
+              ).join("")}
+            </div>
+          </div>
+
+          <div class="feld">
+            <label>Aufgaben — mehrere möglich, die erste ist die hauptsächliche</label>
+            <div class="chips">
+              ${alleRollen
+                .map(
+                  ([wert, text]) =>
+                    `<button class="chipbtn ${rollen.includes(wert) ? "on" : ""} ${
+                      rollen[0] === wert ? "haupt" : ""
+                    }" data-dlgrole="${wert}">${text}</button>`
+                )
+                .join("")}
+            </div>
+            <p class="hint">Eine Dekolampe kann Akzentlicht sein und nachts Orientierung.
+              Klick auf eine gewählte Aufgabe macht sie zur hauptsächlichen, nochmal klicken
+              entfernt sie.</p>
+          </div>
+
+          <div class="feld">
+            <label>Helligkeit</label>
+            <div class="zeile">
+              <span class="unit">Maximum</span>
+              <input type="number" min="1" max="100" style="width:76px"
+                value="${Math.round((f.max_flux ?? 1) * 100)}" data-dlgnum="max_flux"
+                ${f.dimmable ? "" : "disabled"}>
+              <span class="unit">%</span>
+              <span class="unit" style="margin-left:14px">Minimum</span>
+              <input type="number" min="0" max="99" style="width:76px"
+                value="${Math.round((f.min_flux ?? 0.01) * 100)}" data-dlgnum="min_flux"
+                ${f.dimmable ? "" : "disabled"}>
+              <span class="unit">%</span>
+            </div>
+            <p class="hint">${
+              f.dimmable
+                ? "Maximum ist das, was volle Szenenhelligkeit bedeutet."
+                : "Diese Leuchte kann nur an und aus."
+            }</p>
+          </div>
+
+          <div class="feld">
+            <label>Verhalten</label>
+            <div class="chips">
+              ${
+                kannFarbe
+                  ? `<button class="chipbtn ${f.manage_color !== false ? "on" : ""}"
+                       data-dlgflag="manage_color">Farbtemperatur regeln</button>`
+                  : ""
+              }
+              <button class="chipbtn ${f.glares ? "on" : ""}" data-dlgflag="glares">
+                Blendet — nachts sperren</button>
+              <button class="chipbtn ${f.night_capable ? "on" : ""}" data-dlgflag="night_capable">
+                Als Nachtlicht erlaubt</button>
+              <button class="chipbtn ${circuit.enabled ? "on" : ""}" data-dlgenabled="1">
+                ${circuit.enabled ? "wird gesteuert" : "abgeschaltet"}</button>
+            </div>
+          </div>
+        </div>
+        <footer>
+          <button class="btn pri" data-close="1">Fertig</button>
+          <button class="btn weg" data-dlgdelete="${esc(circuit.id)}">Aus der Zone entfernen</button>
+        </footer>
+      </div>
+    </div>`;
+  }
+
+  // -- Dialog: Leuchte hinzufügen --------------------------------------------
+
+  _addDialogHtml() {
+    const zone = this.zoneConfig(this._zoneId);
+    const frei = this._freeLights || [];
+    const imBereich = frei.filter((l) => l.im_bereich);
+    const rest = frei.filter((l) => !l.im_bereich);
+
+    const liste = (titel, eintraege) =>
+      eintraege.length
+        ? `<div class="feld"><label>${titel}</label>
+             <div class="slist">${eintraege
+               .map(
+                 (l) => `<button class="srow" data-addlight="${esc(l.entity_id)}">
+                   <span class="dot"></span>${esc(l.name)}
+                   <span class="meta">${esc(l.entity_id)}</span></button>`
+               )
+               .join("")}</div></div>`
+        : "";
+
+    return `<div class="overlay" data-close="1">
+      <div class="dialog" data-stop="1">
+        <header>
+          <span class="ic">＋</span>
+          <div><h3>Leuchte zu ${esc(zone ? zone.name : "")} hinzufügen</h3>
+            <div class="ent">${frei.length} noch nicht zugeordnet</div></div>
+          <button class="x" data-close="1">×</button>
+        </header>
+        <div class="dlgbody">
+          ${
+            frei.length
+              ? liste("Im Bereich dieser Zone", imBereich) + liste("Übrige", rest)
+              : `<div class="empty">Alle Leuchten sind bereits zugeordnet.</div>`
+          }
+        </div>
+        <footer><button class="btn" data-close="1">Schließen</button></footer>
+      </div>
+    </div>`;
   }
 
   // -- Szenen ---------------------------------------------------------------
@@ -1202,10 +1419,105 @@ class LichtregiePanel extends HTMLElement {
     const target = ev.target.closest(
       "[data-nav],[data-zone],[data-scene],[data-act],[data-release]," +
         "[data-control],[data-template],[data-delbind],[data-curve],[data-toggle],[data-calibrate]," +
-        "[data-edit],[data-delscene],[data-lampflag],[data-delmo],[data-delta]"
+        "[data-edit],[data-delscene],[data-lampflag],[data-delmo],[data-delta]," +
+        "[data-lampdlg],[data-close],[data-stop],[data-dlgicon],[data-dlgrole]," +
+        "[data-dlgflag],[data-dlgenabled],[data-dlgdelete],[data-addlight]"
     );
     if (!target) return;
 
+    // --- Dialog ---------------------------------------------------------
+    if (target.dataset.stop) return;
+    if (target.dataset.close) {
+      this._dialog = null;
+      return this._render();
+    }
+    if (target.dataset.lampdlg) {
+      this._dialog = target.dataset.lampdlg;
+      return this._render();
+    }
+    if (target.dataset.dlgicon) {
+      await this._call("lichtregie/circuit/set", {
+        zone_id: this._zoneId,
+        circuit_id: this._dialog,
+        icon: target.dataset.dlgicon,
+      });
+      this._config = await this._call("lichtregie/config/get");
+      return this._render();
+    }
+    if (target.dataset.dlgrole) {
+      const zone = this.zoneConfig(this._zoneId);
+      const circuit = (zone.circuits || []).find((c) => c.id === this._dialog);
+      const wert = target.dataset.dlgrole;
+      let rollen = [...(circuit.roles || [circuit.role])];
+      if (!rollen.includes(wert)) {
+        rollen.push(wert);
+      } else if (rollen[0] === wert) {
+        rollen = rollen.filter((r) => r !== wert);
+      } else {
+        rollen = [wert, ...rollen.filter((r) => r !== wert)];
+      }
+      if (!rollen.length) rollen = ["general"];
+      await this._call("lichtregie/circuit/set", {
+        zone_id: this._zoneId,
+        circuit_id: this._dialog,
+        roles: rollen,
+        enabled: !(rollen.length === 1 && rollen[0] === "effect"),
+      });
+      this._config = await this._call("lichtregie/config/get");
+      return this._render();
+    }
+    if (target.dataset.dlgflag) {
+      const zone = this.zoneConfig(this._zoneId);
+      const circuit = (zone.circuits || []).find((c) => c.id === this._dialog);
+      const f = (circuit.fixtures || [])[0];
+      const feld = target.dataset.dlgflag;
+      const aktuell = feld === "manage_color" ? f.manage_color !== false : !!f[feld];
+      await this._call("lichtregie/fixture/set", {
+        zone_id: this._zoneId,
+        circuit_id: circuit.id,
+        entity_id: f.entity_id,
+        [feld]: !aktuell,
+      });
+      this._config = await this._call("lichtregie/config/get");
+      return this._render();
+    }
+    if (target.dataset.dlgenabled) {
+      const zone = this.zoneConfig(this._zoneId);
+      const circuit = (zone.circuits || []).find((c) => c.id === this._dialog);
+      await this._call("lichtregie/circuit/set", {
+        zone_id: this._zoneId,
+        circuit_id: circuit.id,
+        enabled: !circuit.enabled,
+      });
+      this._config = await this._call("lichtregie/config/get");
+      return this._render();
+    }
+    if (target.dataset.dlgdelete) {
+      const zone = this.zoneConfig(this._zoneId);
+      const circuit = (zone.circuits || []).find((c) => c.id === target.dataset.dlgdelete);
+      if (!confirm(`„${circuit.name}" aus ${zone.name} entfernen?`)) return;
+      const antwort = await this._call("lichtregie/circuit/delete", {
+        zone_id: this._zoneId,
+        circuit_id: target.dataset.dlgdelete,
+      });
+      this._dialog = null;
+      this._config = await this._call("lichtregie/config/get");
+      this._busy = antwort.leere_szenen
+        ? `${antwort.leere_szenen} Szene(n) sind dadurch leer`
+        : "";
+      return this._render();
+    }
+    if (target.dataset.addlight) {
+      await this._call("lichtregie/circuit/add", {
+        zone_id: this._zoneId,
+        entity_id: target.dataset.addlight,
+      });
+      this._config = await this._call("lichtregie/config/get");
+      this._freeLights = (
+        await this._call("lichtregie/lights/free", { zone_id: this._zoneId })
+      ).leuchten;
+      return this._render();
+    }
     if (target.dataset.lampflag) {
       const zone = this.zoneConfig(this._zoneId);
       const circuit = (zone.circuits || []).find((c) => c.id === target.dataset.lampflag);
@@ -1434,6 +1746,13 @@ class LichtregiePanel extends HTMLElement {
           : "Ist-Zustand gelesen. Zum Sichern eine Szene bearbeiten.";
         return this._render();
       }
+      case "add-light": {
+        this._freeLights = (
+          await this._call("lichtregie/lights/free", { zone_id: this._zoneId })
+        ).leuchten;
+        this._dialog = "add";
+        return this._render();
+      }
       case "to-scenes":
         this._view = "szenen";
         return this._render();
@@ -1622,6 +1941,31 @@ class LichtregiePanel extends HTMLElement {
   }
 
   async _onChange(ev) {
+    const dlgName = ev.target.closest('[data-dlg="name"]');
+    if (dlgName) {
+      await this._call("lichtregie/circuit/set", {
+        zone_id: this._zoneId,
+        circuit_id: this._dialog,
+        name: dlgName.value,
+      });
+      this._config = await this._call("lichtregie/config/get");
+      return this._render();
+    }
+    const dlgNum = ev.target.closest("[data-dlgnum]");
+    if (dlgNum) {
+      const zone = this.zoneConfig(this._zoneId);
+      const circuit = (zone.circuits || []).find((c) => c.id === this._dialog);
+      const f = (circuit.fixtures || [])[0];
+      await this._call("lichtregie/fixture/set", {
+        zone_id: this._zoneId,
+        circuit_id: circuit.id,
+        entity_id: f.entity_id,
+        [dlgNum.dataset.dlgnum]: Math.min(100, Math.max(0, Number(dlgNum.value))) / 100,
+      });
+      this._config = await this._call("lichtregie/config/get");
+      return this._render();
+    }
+
     const lamp = ev.target.closest("[data-lamp],[data-lampnum]");
     if (lamp) {
       const id = lamp.dataset.lamp || lamp.dataset.lampnum;

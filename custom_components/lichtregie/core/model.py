@@ -80,13 +80,40 @@ class Fixture:
 
 @dataclass
 class Circuit:
-    """Leuchten, die immer gemeinsam denselben Wert bekommen."""
+    """Leuchten, die immer gemeinsam denselben Wert bekommen.
+
+    Ein Kreis kann mehrere Aufgaben haben: eine Dekolampe ist tagsüber
+    Akzentlicht und nachts Orientierung. Die erste Rolle gilt als die
+    hauptsächliche und bestimmt Symbol und Sortierung.
+    """
 
     id: str
     name: str
-    role: str = ROLE_GENERAL
+    roles: list[str] = field(default_factory=lambda: [ROLE_GENERAL])
     fixtures: list[Fixture] = field(default_factory=list)
     enabled: bool = True
+    icon: str = ""
+
+    def __post_init__(self) -> None:
+        # Eine einzelne Rolle als Zeichenkette annehmen: sonst würde sie als
+        # Zeichenliste behandelt und jede Prüfung stillschweigend falsch.
+        if isinstance(self.roles, str):
+            self.roles = [self.roles]
+        if not self.roles:
+            self.roles = [ROLE_GENERAL]
+
+    @property
+    def role(self) -> str:
+        """Die hauptsächliche Aufgabe."""
+        return self.roles[0] if self.roles else ROLE_GENERAL
+
+    @role.setter
+    def role(self, value: str) -> None:
+        """Setzt die Hauptrolle, ohne die übrigen zu verlieren."""
+        self.roles = [value] + [r for r in self.roles if r != value]
+
+    def has_role(self, role: str) -> bool:
+        return role in self.roles
 
     @property
     def entity_ids(self) -> list[str]:
@@ -108,17 +135,24 @@ class Circuit:
         return {
             "id": self.id,
             "name": self.name,
+            "roles": list(self.roles),
+            # Für ältere Leser und die Anzeige weiterhin die Hauptrolle.
             "role": self.role,
+            "icon": self.icon,
             "enabled": self.enabled,
             "fixtures": [f.to_dict() for f in self.fixtures],
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Circuit:
+        rollen = data.get("roles")
+        if not rollen:
+            rollen = [data.get("role", ROLE_GENERAL)]
         return cls(
             id=data["id"],
             name=data.get("name", data["id"]),
-            role=data.get("role", ROLE_GENERAL),
+            roles=[r for r in rollen if r] or [ROLE_GENERAL],
+            icon=data.get("icon", ""),
             enabled=data.get("enabled", True),
             fixtures=[Fixture.from_dict(f) for f in data.get("fixtures", [])],
         )
@@ -310,11 +344,11 @@ class Zone:
         return next((s for s in self.scenes if s.id == scene_id), None)
 
     def circuits_with_role(self, role: str) -> list[Circuit]:
-        return [c for c in self.circuits if c.role == role and c.enabled]
+        return [c for c in self.circuits if c.has_role(role) and c.enabled]
 
     @property
     def roles(self) -> set[str]:
-        return {c.role for c in self.circuits if c.enabled}
+        return {r for c in self.circuits if c.enabled for r in c.roles}
 
     @property
     def entity_ids(self) -> list[str]:
