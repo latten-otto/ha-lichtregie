@@ -69,6 +69,7 @@ def async_register(hass: HomeAssistant) -> None:
         ws_circuit_delete,
         ws_free_lights,
         ws_fixture_preview,
+        ws_circuit_copy,
     ):
         websocket_api.async_register_command(hass, handler)
 
@@ -1032,3 +1033,67 @@ async def ws_fixture_preview(hass, connection, msg) -> None:
         max_flux=msg.get("max_flux", fixture.max_flux),
     )
     connection.send_result(msg["id"], {"ok": True, "brightness": brightness})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "lichtregie/circuit/copy",
+        vol.Required("zone_id"): str,
+        vol.Required("from_circuit_id"): str,
+        vol.Required("to_circuit_id"): str,
+        vol.Optional("with_roles", default=True): bool,
+    }
+)
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_circuit_copy(hass, connection, msg) -> None:
+    """Überträgt die Einstellungen einer Leuchte auf eine andere.
+
+    Übernommen werden Aufgaben, Symbol, Betriebsgrenzen, Dimmkurve und das
+    Verhalten. Der Name bleibt, wie er ist — er beschreibt ja gerade das,
+    was diese Leuchte von der anderen unterscheidet. Ebenso bleiben
+    gemessene Werte wie Betriebsstunden unberührt.
+    """
+    store = _store(hass)
+    zone = store.installation.zone(msg["zone_id"])
+    quelle = zone.circuit(msg["from_circuit_id"]) if zone else None
+    ziel = zone.circuit(msg["to_circuit_id"]) if zone else None
+    if quelle is None or ziel is None:
+        connection.send_error(msg["id"], "unbekannt", "Lichtkreis nicht gefunden")
+        return
+    if quelle is ziel:
+        connection.send_error(msg["id"], "gleich", "Quelle und Ziel sind dieselbe Leuchte")
+        return
+
+    uebernommen = []
+    if msg.get("with_roles"):
+        ziel.roles = list(quelle.roles)
+        ziel.icon = quelle.icon
+        uebernommen.append("Aufgaben und Symbol")
+    ziel.enabled = quelle.enabled
+
+    quell_fixture = quelle.fixtures[0] if quelle.fixtures else None
+    if quell_fixture is not None:
+        for fixture in ziel.fixtures:
+            # Nur übertragen, was die Zielleuchte auch kann: eine Leuchte
+            # ohne Farbtemperatur soll nicht plötzlich als farbführend gelten.
+            fixture.curve = quell_fixture.curve
+            fixture.max_flux = quell_fixture.max_flux
+            fixture.min_flux = quell_fixture.min_flux
+            fixture.glares = quell_fixture.glares
+            fixture.night_capable = quell_fixture.night_capable
+            if fixture.color_temp or fixture.color:
+                fixture.manage_color = quell_fixture.manage_color
+        uebernommen.append("Helligkeitsgrenzen, Kurve und Verhalten")
+
+    await store.save(label=f"{quelle.name} → {ziel.name}")
+    _engine(hass).rebuild()
+    connection.send_result(
+        msg["id"],
+        {
+            "ok": True,
+            "circuit": ziel.to_dict(),
+            "uebernommen": uebernommen,
+            "von": quelle.name,
+        },
+    )

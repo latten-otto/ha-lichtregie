@@ -183,6 +183,17 @@ select:focus,input:focus{outline:1px solid var(--amber);outline-offset:1px}
   font-size:17px;display:flex;align-items:center;justify-content:center}
 .iconbtn.on{border-color:var(--amber);background:#221A0F}
 .lamp .sym{font-size:16px;margin-right:8px}
+.kontext{position:fixed;z-index:60;background:var(--panel);border:1px solid var(--line);
+  border-radius:9px;padding:5px;min-width:238px;box-shadow:0 16px 40px rgba(0,0,0,.55)}
+.kontext .kopf{font-size:10.5px;text-transform:uppercase;letter-spacing:.1em;color:var(--faint);
+  padding:7px 11px 5px}
+.kontext button{display:flex;align-items:center;gap:9px;width:100%;text-align:left;
+  padding:8px 11px;border-radius:6px;font-size:13px;color:var(--soft)}
+.kontext button:hover{background:var(--panel2);color:var(--ink)}
+.kontext button.weg:hover{color:var(--red)}
+.kontext .trenner{height:1px;background:var(--line);margin:5px 0}
+.kontext .liste{max-height:240px;overflow:auto}
+.kontext .leer{padding:8px 11px;font-size:12px;color:var(--faint)}
 .lamp .rollen{font-size:10px;color:var(--faint);letter-spacing:.03em}
 .rule{display:grid;grid-template-columns:minmax(150px,1.2fr) minmax(140px,1fr) 120px 130px 30px;
   gap:8px;align-items:center;padding:8px 11px;border-radius:7px;border:1px solid var(--line);
@@ -264,6 +275,7 @@ class LichtregiePanel extends HTMLElement {
     this._showOverrides = false;
     this._grenzeWerte = null;
     this._grenzeTimer = null;
+    this._kontext = null;
     this._busy = "";
     this._bound = false;
     this._ready = false;
@@ -381,6 +393,7 @@ class LichtregiePanel extends HTMLElement {
         </nav>
         <main>${this._viewHtml()}</main>
       </div>
+      ${this._kontext ? this._kontextHtml() : ""}
       ${
         this._dialog === "add"
           ? this._addDialogHtml()
@@ -395,6 +408,13 @@ class LichtregiePanel extends HTMLElement {
       // gestapelt, und ein Umschalter hätte sich selbst wieder aufgehoben.
       this._bound = true;
       app.addEventListener("click", (ev) => this._onClick(ev));
+      app.addEventListener("contextmenu", (ev) => this._onContext(ev));
+      document.addEventListener("keydown", (ev) => {
+        if (ev.key === "Escape" && this._kontext) {
+          this._kontext = null;
+          this._render();
+        }
+      });
       app.addEventListener("change", (ev) => this._onChange(ev));
       app.addEventListener("input", (ev) => this._onInput(ev));
     }
@@ -688,7 +708,7 @@ class LichtregiePanel extends HTMLElement {
       ${zeilen || `<div class="empty">Keine Leuchten in dieser Zone.</div>`}
       <div class="row">
         <button class="btn" data-act="add-light">Leuchte hinzufügen</button>
-        <span class="ent">Auf einen Namen klicken öffnet alle Einstellungen.</span>
+        <span class="ent">Zeile anklicken öffnet die Einstellungen, Rechtsklick das Menü.</span>
       </div>
       <p class="hint">
         <b>Maximum</b> ist das, was ein Sollwert von 100 % ausmacht — stehen deine Leuchten
@@ -698,6 +718,48 @@ class LichtregiePanel extends HTMLElement {
         <b>Blendung</b> sperrt die Leuchte im Nachtfenster.
       </p>
       ${this._busy ? `<div class="row"><span class="chip warn">${esc(this._busy)}</span></div>` : ""}`;
+  }
+
+  // -- Kontextmenü ----------------------------------------------------------
+
+  _kontextHtml() {
+    const zone = this.zoneConfig(this._zoneId);
+    const circuit = (zone.circuits || []).find((c) => c.id === this._kontext.id);
+    if (!circuit) return "";
+    const andere = (zone.circuits || []).filter((c) => c.id !== circuit.id);
+
+    return `<div class="overlay" data-kontextzu="1"
+        style="background:transparent">
+      <div class="kontext" data-stop="1"
+        style="left:${this._kontext.x}px; top:${this._kontext.y}px">
+        <div class="kopf">${esc(circuit.name)}</div>
+        <button data-lampdlg="${esc(circuit.id)}">⚙ Einstellungen öffnen</button>
+        <div class="trenner"></div>
+        <div class="kopf">Einstellungen übernehmen von</div>
+        <div class="liste">
+          ${
+            andere.length
+              ? andere
+                  .map((c) => {
+                    const eigene = c.roles && c.roles.length ? c.roles : [c.role];
+                    const max = Math.round(
+                      ((c.fixtures || [{}])[0].max_flux ?? 1) * 100
+                    );
+                    return `<button data-uebernehmen="${esc(c.id)}">
+                      <span>${esc(c.icon || ROLE_DEFAULT_ICON[eigene[0]] || "💡")}</span>
+                      <span>${esc(c.name)}
+                        <div class="ent">${esc(ROLE_LABEL[eigene[0]] || eigene[0])} · max ${max} %</div>
+                      </span>
+                    </button>`;
+                  })
+                  .join("")
+              : `<div class="leer">Keine andere Leuchte in diesem Raum.</div>`
+          }
+        </div>
+        <div class="trenner"></div>
+        <button class="weg" data-kontextweg="${esc(circuit.id)}">✕ Lampe entfernen</button>
+      </div>
+    </div>`;
   }
 
   // -- Dialog: eine Leuchte -------------------------------------------------
@@ -997,6 +1059,23 @@ class LichtregiePanel extends HTMLElement {
              ${ausnahmeZeilen}`
           : ""
       }`;
+  }
+
+  _onContext(ev) {
+    const zeile = ev.target.closest("[data-lampdlg]");
+    if (!zeile) return;
+    ev.preventDefault();
+    // Am Rand nach innen rücken, damit das Menü nicht abgeschnitten wird.
+    const breite = 250;
+    const hoehe = 320;
+    const fensterBreite = window.innerWidth || 1200;
+    const fensterHoehe = window.innerHeight || 800;
+    this._kontext = {
+      id: zeile.dataset.lampdlg,
+      x: Math.max(8, Math.min(ev.clientX, fensterBreite - breite)),
+      y: Math.max(8, Math.min(ev.clientY, fensterHoehe - hoehe)),
+    };
+    this._render();
   }
 
   // Sollwerte je Lichtkreis — dieselbe Rechnung wie im Kern.
@@ -1528,9 +1607,50 @@ class LichtregiePanel extends HTMLElement {
         "[data-control],[data-template],[data-delbind],[data-curve],[data-toggle],[data-calibrate]," +
         "[data-edit],[data-delscene],[data-lampflag],[data-delmo],[data-delta]," +
         "[data-lampdlg],[data-close],[data-stop],[data-dlgicon],[data-dlgrole],[data-ausweg]," +
+        "[data-kontextzu],[data-uebernehmen],[data-kontextweg]," +
         "[data-dlgflag],[data-dlgenabled],[data-dlgdelete],[data-addlight]"
     );
     if (!target) return;
+
+    // --- Kontextmenü ----------------------------------------------------
+    if (target.dataset.kontextzu) {
+      this._kontext = null;
+      return this._render();
+    }
+    if (target.dataset.uebernehmen) {
+      const quelle = target.dataset.uebernehmen;
+      const ziel = this._kontext.id;
+      this._kontext = null;
+      const antwort = await this._call("lichtregie/circuit/copy", {
+        zone_id: this._zoneId,
+        from_circuit_id: quelle,
+        to_circuit_id: ziel,
+      });
+      this._config = await this._call("lichtregie/config/get");
+      this._busy = antwort.ok
+        ? `Übernommen von „${antwort.von}": ${(antwort.uebernommen || []).join(", ")}`
+        : "Übernehmen fehlgeschlagen";
+      return this._render();
+    }
+    if (target.dataset.kontextweg) {
+      const zone = this.zoneConfig(this._zoneId);
+      const circuit = (zone.circuits || []).find(
+        (c) => c.id === target.dataset.kontextweg
+      );
+      this._kontext = null;
+      if (!confirm(`„${circuit.name}" aus ${zone.name} entfernen?`)) {
+        return this._render();
+      }
+      const antwort = await this._call("lichtregie/circuit/delete", {
+        zone_id: this._zoneId,
+        circuit_id: circuit.id,
+      });
+      this._config = await this._call("lichtregie/config/get");
+      this._busy = antwort.leere_szenen
+        ? `Entfernt — ${antwort.leere_szenen} Szene(n) sind dadurch leer`
+        : "Leuchte entfernt.";
+      return this._render();
+    }
 
     // --- Dialog ---------------------------------------------------------
     if (target.dataset.stop) return;
@@ -1543,6 +1663,7 @@ class LichtregiePanel extends HTMLElement {
       // Auswahlfelder, Zahlen und Schalter in der Zeile bedienen sich selbst.
       if (ev.target.closest("select,input,.toggle,[data-lampflag]")) return;
       this._dialog = target.dataset.lampdlg;
+      this._kontext = null;
       return this._render();
     }
     if (target.dataset.dlgicon) {
