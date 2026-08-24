@@ -68,6 +68,7 @@ def async_register(hass: HomeAssistant) -> None:
         ws_circuit_add,
         ws_circuit_delete,
         ws_free_lights,
+        ws_fixture_preview,
     ):
         websocket_api.async_register_command(hass, handler)
 
@@ -981,3 +982,53 @@ def ws_free_lights(hass, connection, msg) -> None:
 
     frei.sort(key=lambda x: (not x["im_bereich"], x["name"]))
     connection.send_result(msg["id"], {"leuchten": frei})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "lichtregie/fixture/preview",
+        vol.Required("zone_id"): str,
+        vol.Required("circuit_id"): str,
+        vol.Required("entity_id"): str,
+        vol.Optional("level", default=1.0): vol.Coerce(float),
+        vol.Optional("max_flux"): vol.Coerce(float),
+        vol.Optional("min_flux"): vol.Coerce(float),
+        vol.Optional("restore", default=False): bool,
+    }
+)
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_fixture_preview(hass, connection, msg) -> None:
+    """Zeigt einen Grenzwert an der echten Leuchte.
+
+    Mit ``restore`` wird stattdessen der Sollzustand der Zone
+    wiederhergestellt — das gehört ans Ende jeder Vorschau.
+    """
+    engine = _engine(hass)
+    if msg.get("restore"):
+        connection.send_result(
+            msg["id"], {"ok": await engine.restore_zone(msg["zone_id"])}
+        )
+        return
+
+    store = _store(hass)
+    zone = store.installation.zone(msg["zone_id"])
+    circuit = zone.circuit(msg["circuit_id"]) if zone else None
+    fixture = (
+        next((f for f in circuit.fixtures if f.entity_id == msg["entity_id"]), None)
+        if circuit
+        else None
+    )
+    if fixture is None:
+        connection.send_error(msg["id"], "unbekannt", "Leuchte nicht gefunden")
+        return
+
+    brightness = await engine.preview_fixture(
+        zone_id=msg["zone_id"],
+        entity_id=fixture.entity_id,
+        level=msg.get("level", 1.0),
+        curve=fixture.curve,
+        min_flux=msg.get("min_flux", fixture.min_flux),
+        max_flux=msg.get("max_flux", fixture.max_flux),
+    )
+    connection.send_result(msg["id"], {"ok": True, "brightness": brightness})

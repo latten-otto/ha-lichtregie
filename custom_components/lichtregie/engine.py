@@ -1199,6 +1199,49 @@ class Engine:
         await self._run_binding(runtime, binding, source, time.monotonic())
         return True
 
+    async def preview_fixture(
+        self,
+        zone_id: str,
+        entity_id: str,
+        level: float,
+        curve: str,
+        min_flux: float,
+        max_flux: float,
+    ) -> int:
+        """Fährt eine einzelne Leuchte auf einen Sollwert.
+
+        Für die Kontrolle beim Einstellen der Betriebsgrenzen: der Wert 1.0
+        zeigt, was volle Szenenhelligkeit später bedeutet, der Wert 0.0 den
+        kleinsten Punkt, an dem die Leuchte noch brennen soll. Gerechnet
+        wird mit den übergebenen Grenzen, nicht mit den gespeicherten —
+        sonst sähe man die Änderung erst nach dem Speichern.
+        """
+        from .core.photometry import level_to_brightness
+
+        brightness = level_to_brightness(max(level, 0.0001), curve, min_flux, max_flux)
+        await self.hass.services.async_call(
+            "light",
+            "turn_on",
+            {"entity_id": entity_id, "brightness": brightness, "transition": 0.3},
+            blocking=False,
+        )
+        self.journal.log(
+            zone_id,
+            "vorschau",
+            "Grenzwert wird gezeigt",
+            f"{entity_id} auf Stellwert {brightness} "
+            f"({level * 100:.0f} % zwischen {min_flux * 100:.0f} und {max_flux * 100:.0f} %)",
+        )
+        return brightness
+
+    async def restore_zone(self, zone_id: str) -> bool:
+        """Stellt nach einer Vorschau wieder her, was der Stapel sagt."""
+        runtime = self.zones.get(zone_id)
+        if runtime is None:
+            return False
+        await self._apply(runtime, "Nach der Vorschau")
+        return True
+
     async def preview(self, zone_id: str, levels: dict[str, float]) -> bool:
         """Live-Vorschau im Szenen-Editor — ohne Anmeldung im Stapel."""
         runtime = self.zones.get(zone_id)

@@ -168,6 +168,11 @@ select:focus,input:focus{outline:1px solid var(--amber);outline-offset:1px}
   color:var(--faint);margin-bottom:6px}
 .feld input[type=text],.feld select{width:100%}
 .feld .zeile{display:flex;gap:9px;align-items:center}
+.grenze{display:grid;grid-template-columns:78px 1fr 66px 18px;gap:10px;align-items:center;
+  margin-bottom:9px}
+.grenze .gname{font-size:12.5px;color:var(--soft)}
+.grenze input[type=range]{width:100%;accent-color:var(--amber)}
+.grenze input[type=number]{width:100%;text-align:right}
 .chips{display:flex;gap:6px;flex-wrap:wrap}
 .chipbtn{padding:6px 12px;border-radius:100px;border:1px solid var(--line);font-size:12.5px;
   color:var(--soft);background:var(--panel2)}
@@ -257,6 +262,8 @@ class LichtregiePanel extends HTMLElement {
     this._dialog = null;
     this._freeLights = null;
     this._showOverrides = false;
+    this._grenzeWerte = null;
+    this._grenzeTimer = null;
     this._busy = "";
     this._bound = false;
     this._ready = false;
@@ -757,23 +764,36 @@ class LichtregiePanel extends HTMLElement {
           </div>
 
           <div class="feld">
-            <label>Helligkeit</label>
-            <div class="zeile">
-              <span class="unit">Maximum</span>
-              <input type="number" min="1" max="100" style="width:76px"
-                value="${Math.round((f.max_flux ?? 1) * 100)}" data-dlgnum="max_flux"
-                ${f.dimmable ? "" : "disabled"}>
-              <span class="unit">%</span>
-              <span class="unit" style="margin-left:14px">Minimum</span>
-              <input type="number" min="0" max="99" style="width:76px"
-                value="${Math.round((f.min_flux ?? 0.01) * 100)}" data-dlgnum="min_flux"
-                ${f.dimmable ? "" : "disabled"}>
-              <span class="unit">%</span>
-            </div>
+            <label>Helligkeit${
+              f.dimmable ? " — die Leuchte zeigt beim Schieben den Grenzwert" : ""
+            }</label>
+            ${
+              f.dimmable
+                ? `<div class="grenze">
+                     <span class="gname">Maximum</span>
+                     <input type="range" min="1" max="100"
+                       value="${Math.round((f.max_flux ?? 1) * 100)}" data-grenze="max_flux">
+                     <input type="number" min="1" max="100"
+                       value="${Math.round((f.max_flux ?? 1) * 100)}" data-dlgnum="max_flux">
+                     <span class="unit">%</span>
+                   </div>
+                   <div class="grenze">
+                     <span class="gname">Minimum</span>
+                     <input type="range" min="0" max="99"
+                       value="${Math.round((f.min_flux ?? 0.01) * 100)}" data-grenze="min_flux">
+                     <input type="number" min="0" max="99"
+                       value="${Math.round((f.min_flux ?? 0.01) * 100)}" data-dlgnum="min_flux">
+                     <span class="unit">%</span>
+                   </div>`
+                : `<p class="hint">Diese Leuchte kann nur an und aus.</p>`
+            }
             <p class="hint">${
               f.dimmable
-                ? "Maximum ist das, was volle Szenenhelligkeit bedeutet."
-                : "Diese Leuchte kann nur an und aus."
+                ? `<b>Maximum</b> ist das, was volle Szenenhelligkeit bedeutet — beim Schieben
+                   leuchtet die Lampe genau so hell.<br>
+                   <b>Minimum</b> ist der kleinste Wert, bei dem sie noch sauber brennt;
+                   beim Schieben siehst du, ob sie flackert oder ausgeht.`
+                : ""
             }</p>
           </div>
 
@@ -1515,6 +1535,7 @@ class LichtregiePanel extends HTMLElement {
     // --- Dialog ---------------------------------------------------------
     if (target.dataset.stop) return;
     if (target.dataset.close) {
+      await this._vorschauBeenden();
       this._dialog = null;
       return this._render();
     }
@@ -1954,6 +1975,69 @@ class LichtregiePanel extends HTMLElement {
     this._render();
   }
 
+  // Zeigt den Grenzwert an der echten Leuchte, höchstens alle 200 ms.
+  _grenzeVorschau(feld, prozent) {
+    const zone = this.zoneConfig(this._zoneId);
+    const circuit = (zone.circuits || []).find((c) => c.id === this._dialog);
+    if (!circuit) return;
+    const f = (circuit.fixtures || [])[0];
+
+    const andere = this.shadowRoot.querySelector(
+      `input[data-grenze="${feld === "max_flux" ? "min_flux" : "max_flux"}"]`
+    );
+    const zweiter = andere ? Number(andere.value) / 100 : null;
+    const max = feld === "max_flux" ? prozent / 100 : zweiter ?? f.max_flux;
+    const min = feld === "min_flux" ? prozent / 100 : zweiter ?? f.min_flux;
+
+    this._grenzeWerte = { max_flux: max, min_flux: min };
+
+    if (this._grenzeTimer) return;
+    this._grenzeTimer = setTimeout(() => {
+      this._grenzeTimer = null;
+      const g = this._grenzeWerte;
+      this._call("lichtregie/fixture/preview", {
+        zone_id: this._zoneId,
+        circuit_id: circuit.id,
+        entity_id: f.entity_id,
+        // Maximum zeigt volle Helligkeit, Minimum den untersten Punkt.
+        level: feld === "max_flux" ? 1.0 : 0.0001,
+        max_flux: Math.max(g.max_flux, g.min_flux + 0.01),
+        min_flux: Math.min(g.min_flux, g.max_flux - 0.01),
+      });
+    }, 200);
+  }
+
+  async _grenzeSpeichern(feld, prozent) {
+    const zone = this.zoneConfig(this._zoneId);
+    const circuit = (zone.circuits || []).find((c) => c.id === this._dialog);
+    if (!circuit) return;
+    const f = (circuit.fixtures || [])[0];
+    await this._call("lichtregie/fixture/set", {
+      zone_id: this._zoneId,
+      circuit_id: circuit.id,
+      entity_id: f.entity_id,
+      [feld]: Math.min(100, Math.max(0, prozent)) / 100,
+    });
+    this._config = await this._call("lichtregie/config/get");
+    this._render();
+  }
+
+  // Nach dem Einstellen wieder das zeigen, was die Regie vorsieht.
+  async _vorschauBeenden() {
+    if (this._grenzeTimer) {
+      clearTimeout(this._grenzeTimer);
+      this._grenzeTimer = null;
+    }
+    if (!this._grenzeWerte) return;
+    this._grenzeWerte = null;
+    await this._call("lichtregie/fixture/preview", {
+      zone_id: this._zoneId,
+      circuit_id: this._dialog || "",
+      entity_id: "",
+      restore: true,
+    });
+  }
+
   _aktuelleOverrides() {
     const zone = this.zoneConfig(this._zoneId);
     const scene = (zone.scenes || []).find((sc) => sc.id === this._editScene);
@@ -2056,6 +2140,16 @@ class LichtregiePanel extends HTMLElement {
   }
 
   _onInput(ev) {
+    const grenze = ev.target.closest("input[data-grenze]");
+    if (grenze) {
+      const feld = grenze.dataset.grenze;
+      const wert = Number(grenze.value);
+      const zahl = this.shadowRoot.querySelector(`input[data-dlgnum="${feld}"]`);
+      if (zahl) zahl.value = wert;
+      this._grenzeVorschau(feld, wert);
+      return;
+    }
+
     const rolle = ev.target.closest("input[data-rolle]");
     if (rolle) {
       const wert = Number(rolle.value);
@@ -2095,6 +2189,11 @@ class LichtregiePanel extends HTMLElement {
   }
 
   async _onChange(ev) {
+    const grenze = ev.target.closest("input[data-grenze]");
+    if (grenze) {
+      return this._grenzeSpeichern(grenze.dataset.grenze, Number(grenze.value));
+    }
+
     const aus = ev.target.closest("input[data-aus]");
     if (aus) {
       const ausnahmen = { ...(this._draft.overrides || this._aktuelleOverrides()) };
@@ -2117,6 +2216,10 @@ class LichtregiePanel extends HTMLElement {
     }
     const dlgNum = ev.target.closest("[data-dlgnum]");
     if (dlgNum) {
+      const regler = this.shadowRoot.querySelector(
+        `input[data-grenze="${dlgNum.dataset.dlgnum}"]`
+      );
+      if (regler) regler.value = dlgNum.value;
       const zone = this.zoneConfig(this._zoneId);
       const circuit = (zone.circuits || []).find((c) => c.id === this._dialog);
       const f = (circuit.fixtures || [])[0];
