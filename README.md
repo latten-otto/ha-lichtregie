@@ -90,6 +90,33 @@ python3 tests/run.py
 4. Die Anlage wird beim ersten Start eingelesen; die Oberfläche erscheint als
    **Lichtregie** in der Seitenleiste.
 
+## Bauformen
+
+Jede Leuchte trägt eine Bauform. Sie steht in der Lampenliste vor dem Namen,
+im Kopf ihres Einstellungsdialogs, im Kontextmenü und in der Ausnahmeliste
+des Szeneneditors — überall dort, wo man eine Leuchte wiedererkennen muss,
+bevor man ihren Namen gelesen hat.
+
+Siebzehn Zeichnungen: Deckenleuchte · Lichtpanel · Einbauspot · Strahler ·
+Pendelleuchte · Stehleuchte · Tischleuchte · Wandleuchte · Lichtband ·
+Indirekt · Unterbau · Spiegelleuchte · Nachtlicht · Kerze · Lichterkette ·
+Außenleuchte · Sonstige.
+
+Es sind eigene Strichzeichnungen, keine Emoji und keine fremde Icon-Schrift:
+Emoji sehen auf jedem Gerät anders aus, lassen sich nicht einfärben und
+zeigen nie die Leuchte, die im Raum wirklich hängt. Alle liegen im selben
+24er-Raster, haben dieselbe Strichstärke und erben die Textfarbe — deshalb
+färbt sich die gewählte Bauform im Dialog von allein bernstein. Aufbau ist
+immer derselbe: erst der Baukörper, dann das Licht, das er abgibt. Genau
+daran erkennt man sie auch in sechzehn Pixeln wieder.
+
+Wer nichts wählt, bekommt die Bauform seiner hauptsächlichen Aufgabe:
+Deckenlicht → Deckenleuchte, Arbeitslicht → Einbauspot, Stimmungslicht →
+Stehleuchte, Akzentlicht → Strahler, Orientierung → Nachtlicht, Effekt →
+Lichterkette. Früher gewählte Emoji werden beim Lesen auf die passende
+Bauform abgebildet, die gespeicherte Konfiguration muss dafür nicht
+angefasst werden.
+
 ## Bedienelemente
 
 Alle Fabrikate werden auf ein gemeinsames Vokabular abgebildet: Tippen,

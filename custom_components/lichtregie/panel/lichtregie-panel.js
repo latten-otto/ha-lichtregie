@@ -155,7 +155,7 @@ select:focus,input:focus{outline:1px solid var(--amber);outline-offset:1px}
   max-height:88vh;overflow:auto;box-shadow:0 24px 60px rgba(0,0,0,.6)}
 .dialog header{display:flex;align-items:center;gap:12px;padding:16px 20px;border-bottom:1px solid var(--line)}
 .dialog header .ic{width:38px;height:38px;border-radius:9px;background:var(--panel2);
-  display:flex;align-items:center;justify-content:center;font-size:19px;flex:0 0 auto}
+  display:flex;align-items:center;justify-content:center;color:var(--amber);flex:0 0 auto}
 .dialog header h3{margin:0;font-size:15px;font-weight:600}
 .dialog header .ent{font-family:ui-monospace,monospace;font-size:11px;color:var(--faint)}
 .dialog header .x{margin-left:auto;font-size:20px;color:var(--faint);padding:0 4px}
@@ -178,11 +178,16 @@ select:focus,input:focus{outline:1px solid var(--amber);outline-offset:1px}
   color:var(--soft);background:var(--panel2)}
 .chipbtn.on{border-color:var(--amber);color:var(--amber);background:#221A0F}
 .chipbtn.haupt::after{content:" · Haupt";font-size:10px;opacity:.8}
-.iconwahl{display:flex;gap:6px;flex-wrap:wrap}
-.iconbtn{width:36px;height:36px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);
-  font-size:17px;display:flex;align-items:center;justify-content:center}
-.iconbtn.on{border-color:var(--amber);background:#221A0F}
-.lamp .sym{font-size:16px;margin-right:8px}
+.iconwahl{display:grid;grid-template-columns:repeat(auto-fill,minmax(76px,1fr));gap:6px}
+.iconbtn{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:6px;
+  padding:9px 4px 7px;border-radius:9px;border:1px solid var(--line);background:var(--panel2);
+  color:var(--soft);font-size:9.5px;line-height:1.2;text-align:center}
+.iconbtn:hover{border-color:#3A404C;color:var(--ink)}
+.iconbtn.on{border-color:var(--amber);background:#221A0F;color:var(--amber)}
+.sym{display:inline-flex;align-items:center;justify-content:center;color:var(--amber);
+  vertical-align:-3px;flex:0 0 auto}
+.lamp .sym{margin-right:8px}
+.lamp.off .sym{color:var(--soft)}
 .kontext{position:fixed;z-index:60;background:var(--panel);border:1px solid var(--line);
   border-radius:9px;padding:5px;min-width:238px;box-shadow:0 16px 40px rgba(0,0,0,.55)}
 .kontext .kopf{font-size:10.5px;text-transform:uppercase;letter-spacing:.1em;color:var(--faint);
@@ -220,16 +225,196 @@ select:focus,input:focus{outline:1px solid var(--amber);outline-offset:1px}
 }
 `;
 
-const ROLE_ICONS = ["💡", "🔆", "🛋", "🕯", "🌙", "🎨", "🔦", "🖼", "🪞", "🍽", "🛏", "🚿"];
+/* Bauformen ---------------------------------------------------------------
+ *
+ * Eigene Strichzeichnungen statt Emoji. Emoji sehen auf jedem Gerät anders
+ * aus, lassen sich nicht einfärben und zeigen nie die Leuchte, die im Raum
+ * wirklich hängt. Alle Zeichnungen liegen im selben 24er-Raster, haben
+ * dieselbe Strichstärke und erben die Farbe vom Text — dadurch färbt sich
+ * die gewählte Bauform von allein bernstein.
+ *
+ * Aufbau jeder Zeichnung: erst der Baukörper, dann das Licht, das er
+ * abgibt. Genau daran erkennt man die Bauform auch in 16 Pixeln wieder.
+ */
 
-const ROLE_DEFAULT_ICON = {
-  general: "💡",
-  task: "🔆",
-  ambient: "🛋",
-  accent: "🕯",
-  night: "🌙",
-  effect: "🎨",
+const LAMP_TYPES = [
+  {
+    id: "decke",
+    label: "Deckenleuchte",
+    art: `<path d="M2.5 4.5h19"/>
+      <path d="M5 4.5a7 7 0 0 0 14 0"/>
+      <path d="M8 13.5 7 16.5"/><path d="M12 14v3"/><path d="M16 13.5l1 3"/>`,
+  },
+  {
+    id: "panel",
+    label: "Lichtpanel",
+    art: `<path d="M2.5 4h19"/>
+      <rect x="4.5" y="5.4" width="15" height="3.8" rx="1.2"/>
+      <path d="M9.5 5.4v3.8"/><path d="M14.5 5.4v3.8"/>
+      <path d="M7 12v3"/><path d="M12 12v3.8"/><path d="M17 12v3"/>`,
+  },
+  {
+    id: "einbau",
+    label: "Einbauspot",
+    art: `<path d="M2.5 5.5h19"/>
+      <path d="M7.5 5.5a4.5 4.5 0 0 0 9 0" fill="currentColor" fill-opacity=".16"/>
+      <path d="M9 11 6.5 17.5"/><path d="M12 11.5v6.5"/><path d="M15 11 17.5 17.5"/>`,
+  },
+  {
+    id: "spot",
+    label: "Strahler",
+    art: `<path d="M2.5 4.5h19"/><path d="M12 4.5v2.5"/>
+      <g transform="rotate(-25 12 7)">
+        <path d="M8.6 7h6.8l-1.1 7h-4.6z"/>
+        <path d="M9.9 15.8 9.2 18.6"/><path d="M12 15.8v3"/><path d="M14.1 15.8l.7 2.8"/>
+      </g>`,
+  },
+  {
+    id: "pendel",
+    label: "Pendelleuchte",
+    art: `<path d="M4 2.5h16" opacity=".45"/><path d="M12 2.5v4.5"/>
+      <path d="M7 15.5 10 7h4l3 8.5z"/>
+      <path d="M9 17.5 8.2 20"/><path d="M12 17.5V20.5"/><path d="M15 17.5l.8 2.5"/>`,
+  },
+  {
+    id: "steh",
+    label: "Stehleuchte",
+    art: `<path d="M6.5 10.5 9.5 3.5h5l3 7z"/>
+      <path d="M12 10.5V20.5"/><path d="M8.5 20.5h7"/>`,
+  },
+  {
+    id: "tisch",
+    label: "Tischleuchte",
+    art: `<path d="M7.5 11.5 10 5.5h4l2.5 6z"/>
+      <path d="M12 11.5V17"/><path d="M9 17h6l1 2.5H8z"/>
+      <path d="M3 20.5h18" opacity=".45"/>`,
+  },
+  {
+    id: "wand",
+    label: "Wandleuchte",
+    art: `<path d="M4.5 2.5v19"/>
+      <path d="M4.5 8.5H9a3.5 3.5 0 0 1 0 7H4.5z" fill="currentColor" fill-opacity=".16"/>
+      <path d="M7.5 6.6 6.7 4.2"/><path d="M11.4 7.4 12.8 5.2"/>
+      <path d="M7.5 17.4 6.7 19.8"/><path d="M11.4 16.6 12.8 18.8"/>`,
+  },
+  {
+    id: "band",
+    label: "Lichtband",
+    art: `<rect x="2.5" y="6.5" width="19" height="4" rx="2"/>
+      <circle cx="6.5" cy="8.5" r=".9" fill="currentColor" stroke="none"/>
+      <circle cx="10.2" cy="8.5" r=".9" fill="currentColor" stroke="none"/>
+      <circle cx="13.9" cy="8.5" r=".9" fill="currentColor" stroke="none"/>
+      <circle cx="17.6" cy="8.5" r=".9" fill="currentColor" stroke="none"/>
+      <path d="M6 12.5v3"/><path d="M12 12.5v3.8"/><path d="M18 12.5v3"/>`,
+  },
+  {
+    id: "voute",
+    label: "Indirekt",
+    art: `<path d="M2.5 3.5h19"/>
+      <rect x="4" y="11.6" width="16" height="2.4" rx="1.2"/>
+      <path d="M6.6 9.6 5.3 5.4"/><path d="M12 9.6V5"/><path d="M17.4 9.6l1.3-4.2"/>`,
+  },
+  {
+    id: "unterschrank",
+    label: "Unterbau",
+    art: `<rect x="3.5" y="2.5" width="17" height="7" rx="1.2"/>
+      <rect x="6" y="9.8" width="12" height="2.2" rx="1.1"/>
+      <path d="M7.5 14 6 17.5"/><path d="M12 14v3.8"/><path d="M16.5 14l1.5 3.5"/>
+      <path d="M2.5 20.5h19" opacity=".45"/>`,
+  },
+  {
+    id: "spiegel",
+    label: "Spiegelleuchte",
+    art: `<rect x="8" y="2.4" width="8" height="2.2" rx="1.1"/>
+      <path d="M9.8 5.4 9 7.2"/><path d="M12 5.4v1.9"/><path d="M14.2 5.4l.8 1.8"/>
+      <rect x="6.5" y="7.6" width="11" height="13.4" rx="1.6"/>
+      <path d="M8.6 17.8 12 13" opacity=".45"/><path d="M11 18 12.9 15.4" opacity=".45"/>`,
+  },
+  {
+    id: "nacht",
+    label: "Nachtlicht",
+    art: `<g transform="translate(12.2 -1.2) scale(.5)" stroke-width="3">
+        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+      </g>
+      <rect x="3" y="11" width="6.5" height="4.2" rx="1.6"/>
+      <path d="M4.5 16.8 3.6 19.4"/><path d="M8 16.8l.9 2.6"/>
+      <path d="M2.5 21h19" opacity=".45"/>`,
+  },
+  {
+    id: "kerze",
+    label: "Kerze",
+    art: `<path d="M12 2.5c1.8 2 2.7 3.4 2.7 4.7a2.7 2.7 0 0 1-5.4 0c0-1.3.9-2.7 2.7-4.7z"/>
+      <path d="M12 10.2v1.3"/>
+      <rect x="9" y="11.5" width="6" height="9" rx="1"/>`,
+  },
+  {
+    id: "kette",
+    label: "Lichterkette",
+    art: `<path d="M2.5 4.5c4.5 5 14.5 5 19 0"/>
+      <path d="M6.6 7.6v1.4"/><path d="M12 8.6v1.4"/><path d="M17.4 7.6v1.4"/>
+      <path d="M6.6 9c1.4 1.4 1.9 2.3 1.9 3.1a1.9 1.9 0 0 1-3.8 0c0-.8.5-1.7 1.9-3.1z"/>
+      <path d="M12 10c1.4 1.4 1.9 2.3 1.9 3.1a1.9 1.9 0 0 1-3.8 0c0-.8.5-1.7 1.9-3.1z"/>
+      <path d="M17.4 9c1.4 1.4 1.9 2.3 1.9 3.1a1.9 1.9 0 0 1-3.8 0c0-.8.5-1.7 1.9-3.1z"/>`,
+  },
+  {
+    id: "aussen",
+    label: "Außenleuchte",
+    art: `<path d="M9.4 20.4V8.6a2.6 2.6 0 0 1 5.2 0v11.8z"/>
+      <path d="M9.4 11.4h5.2v2.2H9.4z" fill="currentColor" fill-opacity=".16" stroke="none"/>
+      <path d="M9.4 11.4h5.2"/><path d="M9.4 13.6h5.2"/>
+      <path d="M8.2 13.2 5.8 14.6"/><path d="M15.8 13.2 18.2 14.6"/>
+      <path d="M4.5 20.8h15" opacity=".45"/>`,
+  },
+  {
+    id: "lampe",
+    label: "Sonstige",
+    art: `<path d="M12 2.8a6 6 0 0 0-3.6 10.8c.7.6 1.1 1.3 1.1 2.1h5c0-.8.4-1.5 1.1-2.1A6 6 0 0 0 12 2.8z"/>
+      <path d="M9.5 18.3h5"/><path d="M10.4 21h3.2"/>`,
+  },
+];
+
+const LAMP_ART = Object.fromEntries(LAMP_TYPES.map((t) => [t.id, t.art]));
+
+// Voreinstellung je Aufgabe, solange an der Leuchte nichts gewählt wurde.
+const ROLE_DEFAULT_TYPE = {
+  general: "decke",
+  task: "einbau",
+  ambient: "steh",
+  accent: "spot",
+  night: "nacht",
+  effect: "kette",
 };
+
+// Früher standen hier Emoji. Gespeicherte Konfigurationen bringen sie noch
+// mit, deshalb werden sie beim Lesen auf die passende Bauform abgebildet.
+const EMOJI_TYPES = {
+  "💡": "lampe",
+  "🔆": "panel",
+  "🛋": "steh",
+  "🕯": "kerze",
+  "🌙": "nacht",
+  "🎨": "kette",
+  "🔦": "spot",
+  "🖼": "wand",
+  "🪞": "spiegel",
+  "🍽": "pendel",
+  "🛏": "tisch",
+  "🚿": "einbau",
+};
+
+// Welche Bauform gehört zu dieser Leuchte — gewählte, übersetzte oder die
+// Voreinstellung ihrer hauptsächlichen Aufgabe.
+const lampType = (circuit) => {
+  const gewaehlt = EMOJI_TYPES[circuit.icon] || circuit.icon;
+  if (gewaehlt && LAMP_ART[gewaehlt]) return gewaehlt;
+  const rollen = circuit.roles && circuit.roles.length ? circuit.roles : [circuit.role];
+  return ROLE_DEFAULT_TYPE[rollen[0]] || "lampe";
+};
+
+const lampIcon = (typ, size = 17) =>
+  `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none"
+     stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+     stroke-linejoin="round" aria-hidden="true">${LAMP_ART[typ] || LAMP_ART.lampe}</svg>`;
 
 const ROLE_LABEL = {
   general: "Grund",
@@ -642,12 +827,12 @@ class LichtregiePanel extends HTMLElement {
         // Nicht "rollen" nennen — das ist oben die Liste aller Auswahlmöglichkeiten.
         const eigene = circuit.roles && circuit.roles.length ? circuit.roles : [circuit.role];
         const haupt = eigene[0];
-        const symbol = circuit.icon || ROLE_DEFAULT_ICON[haupt] || "💡";
+        const bauform = lampType(circuit);
         return `<div class="lamp ${circuit.enabled ? "" : "off"}"
             data-lampdlg="${esc(circuit.id)}" title="Einstellungen öffnen">
           <div>
             <div class="lname">
-              <span class="sym">${esc(symbol)}</span>
+              <span class="sym">${lampIcon(bauform)}</span>
               <span class="nam">${esc(circuit.name)}</span>
               ${f.dimmable ? "" : `<span class="kann">· nicht dimmbar</span>`}
             </div>
@@ -746,7 +931,7 @@ class LichtregiePanel extends HTMLElement {
                       ((c.fixtures || [{}])[0].max_flux ?? 1) * 100
                     );
                     return `<button data-uebernehmen="${esc(c.id)}">
-                      <span>${esc(c.icon || ROLE_DEFAULT_ICON[eigene[0]] || "💡")}</span>
+                      <span class="sym">${lampIcon(lampType(c), 16)}</span>
                       <span>${esc(c.name)}
                         <div class="ent">${esc(ROLE_LABEL[eigene[0]] || eigene[0])} · max ${max} %</div>
                       </span>
@@ -770,7 +955,7 @@ class LichtregiePanel extends HTMLElement {
     if (!circuit) return "";
     const f = (circuit.fixtures || [])[0] || {};
     const rollen = circuit.roles && circuit.roles.length ? circuit.roles : [circuit.role];
-    const symbol = circuit.icon || ROLE_DEFAULT_ICON[rollen[0]] || "💡";
+    const bauform = lampType(circuit);
     const kannFarbe = f.color_temp || f.color;
 
     const alleRollen = [
@@ -785,7 +970,7 @@ class LichtregiePanel extends HTMLElement {
     return `<div class="overlay" data-close="1">
       <div class="dialog" data-stop="1">
         <header>
-          <span class="ic">${esc(symbol)}</span>
+          <span class="ic">${lampIcon(bauform, 21)}</span>
           <div>
             <h3>${esc(circuit.name)}</h3>
             <div class="ent">${esc(f.entity_id || "")}</div>
@@ -799,11 +984,14 @@ class LichtregiePanel extends HTMLElement {
           </div>
 
           <div class="feld">
-            <label>Symbol</label>
+            <label>Bauform</label>
             <div class="iconwahl">
-              ${ROLE_ICONS.map(
-                (i) =>
-                  `<button class="iconbtn ${i === symbol ? "on" : ""}" data-dlgicon="${esc(i)}">${i}</button>`
+              ${LAMP_TYPES.map(
+                (t) =>
+                  `<button class="iconbtn ${t.id === bauform ? "on" : ""}"
+                     data-dlgicon="${t.id}" title="${esc(t.label)}">${lampIcon(t.id, 22)}<span>${esc(
+                    t.label
+                  )}</span></button>`
               ).join("")}
             </div>
           </div>
@@ -1010,7 +1198,7 @@ class LichtregiePanel extends HTMLElement {
         const hat = Object.prototype.hasOwnProperty.call(ausnahmen, c.id);
         const wert = Math.round((hat ? ausnahmen[c.id] : ausRolle) * 100);
         return `<div class="rule" style="grid-template-columns:minmax(160px,1.4fr) 150px 120px 30px">
-          <div class="src">${esc(c.icon || ROLE_DEFAULT_ICON[eigene[0]] || "💡")} ${esc(c.name)}
+          <div class="src"><span class="sym">${lampIcon(lampType(c), 15)}</span> ${esc(c.name)}
             <div class="ent">${eigene.map((r) => esc(ROLE_LABEL[r] || r)).join(" + ")}</div></div>
           <div class="num">
             <input type="number" min="0" max="100" value="${wert}" data-aus="${esc(c.id)}"
