@@ -16,6 +16,7 @@ from ..const import (
     LAYER_SCENE,
     ROLE_GENERAL,
 )
+from .naming import KIND_DEFAULTS
 
 
 def _new_id(prefix: str, taken: set[str]) -> str:
@@ -365,6 +366,35 @@ class Zone:
     daylight: bool = True        # Farbe und Helligkeit nachführen
     constant_light: bool = False # nur sinnvoll bei regelfähigem Sensor
     calibration: dict = field(default_factory=dict)
+
+    def apply_kind_defaults(self) -> bool:
+        """Übernimmt die Richtwerte der Raumart.
+
+        Ausdrücklich und nur auf Verlangen: eine von Hand eingestellte Zone
+        verlöre sonst bei jedem Wechsel der Raumart ihre Werte. Gibt zurück,
+        ob es für die Art überhaupt Richtwerte gibt.
+        """
+        werte = KIND_DEFAULTS.get(self.kind)
+        if not werte:
+            return False
+        self.setpoint_lux = float(werte["setpoint_lux"])
+        self.lux_on_below = float(werte["on_below"])
+        self.lux_off_above = float(werte["off_above"])
+        self.linger = float(werte["linger"])
+        return True
+
+    def use_lux_sensor(self, entity_id: str | None, quality: str = "unbekannt") -> None:
+        """Setzt den Helligkeitssensor und zieht die Folgen daraus.
+
+        Konstantlichtregelung braucht einen Sensor, der Änderungen zeigt.
+        Fällt der Sensor weg oder taugt der neue nur für Momentaufnahmen,
+        wird sie abgeschaltet — sonst regelte die Zone gegen einen Wert,
+        der sich nie bewegt, und pumpte.
+        """
+        self.lux_entity = entity_id or None
+        self.lux_quality = quality if self.lux_entity else "unbekannt"
+        if self.lux_quality != "regelfaehig":
+            self.constant_light = False
 
     def circuit(self, circuit_id: str) -> Circuit | None:
         return next((c for c in self.circuits if c.id == circuit_id), None)

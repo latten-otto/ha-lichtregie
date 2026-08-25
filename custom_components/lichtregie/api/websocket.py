@@ -60,6 +60,8 @@ def async_register(hass: HomeAssistant) -> None:
         ws_calibrate,
         ws_curves,
         ws_zone_settings,
+        ws_zone_candidates,
+        ws_control_zone,
         ws_scene_set,
         ws_scene_delete,
         ws_scene_snapshot,
@@ -584,25 +586,212 @@ async def ws_calibrate(hass, connection, msg) -> None:
         vol.Optional("setpoint_lux"): vol.Coerce(float),
         vol.Optional("linger"): vol.Coerce(float),
         vol.Optional("kind"): str,
+        vol.Optional("presence_entities"): [str],
+        vol.Optional("lux_entity"): vol.Any(str, None),
+        vol.Optional("kind_defaults"): bool,
     }
 )
 @websocket_api.require_admin
 @websocket_api.async_response
 async def ws_zone_settings(hass, connection, msg) -> None:
     """Einzelne Werte einer Zone ändern, ohne sie komplett zu ersetzen."""
+    from ..link.discovery import rate_lux_sensor
+
     store = _store(hass)
     zone = store.installation.zone(msg["zone_id"])
     if zone is None:
         connection.send_error(msg["id"], "unbekannt", "Zone nicht gefunden")
         return
 
-    for field in ("daylight", "constant_light", "curve_key", "setpoint_lux", "linger", "kind"):
+    for field in (
+        "daylight",
+        "constant_light",
+        "curve_key",
+        "setpoint_lux",
+        "linger",
+        "kind",
+        "presence_entities",
+    ):
         if field in msg:
             setattr(zone, field, msg[field])
+
+    # Der Helligkeitssensor wird nach jedem Wechsel neu bewertet. Ohne das
+    # bliebe die alte Einstufung stehen und die Konstantlichtregelung
+    # verließe sich auf einen Sensor, der längst ein anderer ist.
+    if "lux_entity" in msg:
+        neuer = msg["lux_entity"] or None
+        if neuer != zone.lux_entity:
+            quality = "unbekannt"
+            if neuer is not None:
+                quality, _stats = await rate_lux_sensor(hass, neuer)
+            zone.use_lux_sensor(neuer, quality)
+
+    # Richtwerte der Raumart auf Wunsch mitübernehmen — nie stillschweigend,
+    # sonst verliert eine von Hand eingestellte Zone ihre Werte.
+    if msg.get("kind_defaults"):
+        zone.apply_kind_defaults()
 
     await store.save(label=f"Einstellungen {zone.name}")
     _engine(hass).rebuild()
     connection.send_result(msg["id"], {"ok": True, "zone": zone.to_dict()})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "lichtregie/zone/candidates",
+        vol.Required("zone_id"): str,
+    }
+)
+@callback
+def ws_zone_candidates(hass, connection, msg) -> None:
+    """Was sich einer Zone zuordnen lässt: Melder, Helligkeitssensoren, Taster.
+
+    Alles aus Home Assistant, nicht nur das beim Einlesen Gefundene — ein
+    Melder hängt oft am falschen Bereich, und genau dann braucht man die
+    vollständige Liste. Was im Bereich der Zone liegt, steht oben.
+    """
+    from ..core.daylight import DEFAULT_CURVES, KIND_TO_CURVE
+    from ..core.naming import KIND_DEFAULTS
+
+    store = _store(hass)
+    zone = store.installation.zone(msg["zone_id"])
+    if zone is None:
+        connection.send_error(msg["id"], "unbekannt", "Zone nicht gefunden")
+        return
+
+    entities = er.async_get(hass)
+    devices = dr.async_get(hass)
+
+    def _im_bereich(entity_id: str) -> bool:
+        entry = entities.async_get(entity_id)
+        if entry is None or zone.area_id is None:
+            return False
+        if entry.area_id:
+            return entry.area_id == zone.area_id
+        device = devices.async_get(entry.device_id) if entry.device_id else None
+        return device is not None and device.area_id == zone.area_id
+
+    # Wo ein Melder oder Sensor bereits hängt — doppelte Zuordnung ist
+    # zulässig (ein Flurmelder darf zwei Zonen wecken), soll aber sichtbar
+    # sein.
+    belegt: dict[str, str] = {}
+    for andere in store.installation.zones:
+        if andere.id == zone.id:
+            continue
+        for entity_id in andere.presence_entities:
+            belegt[entity_id] = andere.name
+        if andere.lux_entity:
+            belegt.setdefault(andere.lux_entity, andere.name)
+
+    melder = []
+    helligkeit = []
+    for state in hass.states.async_all():
+        device_class = state.attributes.get("device_class")
+        eintrag = {
+            "entity_id": state.entity_id,
+            "name": state.name,
+            "im_bereich": _im_bereich(state.entity_id),
+            "belegt_in": belegt.get(state.entity_id),
+            "zustand": state.state,
+        }
+        if state.entity_id.startswith("binary_sensor.") and device_class in (
+            "motion",
+            "occupancy",
+            "presence",
+        ):
+            melder.append(eintrag)
+        elif state.entity_id.startswith("sensor.") and device_class == "illuminance":
+            helligkeit.append(eintrag)
+
+    def _sortierung(eintrag: dict) -> tuple:
+        return (not eintrag["im_bereich"], eintrag["name"])
+
+    melder.sort(key=_sortierung)
+    helligkeit.sort(key=_sortierung)
+
+    bedienelemente = [
+        {
+            "id": control.id,
+            "name": control.name,
+            "model": control.model,
+            "buttons": control.buttons,
+            "zone_id": control.zone_id,
+            "zone_name": (
+                z.name if (z := store.installation.zone(control.zone_id or "")) else None
+            ),
+            "im_bereich": bool(
+                control.entity_id and _im_bereich(control.entity_id)
+            ),
+            "bindings": len(control.bindings),
+            "direct_bound": control.direct_bound,
+        }
+        for control in store.installation.controls
+    ]
+    bedienelemente.sort(
+        key=lambda x: (
+            x["zone_id"] != zone.id,
+            not x["im_bereich"],
+            x["zone_id"] is not None,
+            x["name"],
+        )
+    )
+
+    connection.send_result(
+        msg["id"],
+        {
+            "melder": melder,
+            "helligkeit": helligkeit,
+            "bedienelemente": bedienelemente,
+            "raumtypen": [
+                {
+                    "key": key,
+                    "kurve": KIND_TO_CURVE.get(key, ""),
+                    "richtwerte": werte,
+                }
+                for key, werte in KIND_DEFAULTS.items()
+            ],
+            "kurven": [
+                {"key": key, "name": kurve.name}
+                for key, kurve in DEFAULT_CURVES.items()
+            ],
+        },
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "lichtregie/control/zone",
+        vol.Required("control_id"): str,
+        vol.Required("zone_id"): vol.Any(str, None),
+    }
+)
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_control_zone(hass, connection, msg) -> None:
+    """Ordnet ein Bedienelement einer Zone zu oder nimmt es heraus."""
+    store = _store(hass)
+    control = store.installation.control(msg["control_id"])
+    if control is None:
+        connection.send_error(msg["id"], "unbekannt", "Bedienelement nicht gefunden")
+        return
+
+    zone_id = msg["zone_id"] or None
+    if zone_id and store.installation.zone(zone_id) is None:
+        connection.send_error(msg["id"], "unbekannt", "Zone nicht gefunden")
+        return
+
+    # Die Belegung zeigt auf Szenen der alten Zone. Bleibt sie stehen,
+    # schaltet der Sender ins Leere — die Szenen-IDs gibt es in der neuen
+    # Zone nicht.
+    verworfen = 0
+    if zone_id != control.zone_id:
+        verworfen = len([b for b in control.bindings if b.action == "scene"])
+        control.bindings = [b for b in control.bindings if b.action != "scene"]
+    control.zone_id = zone_id
+
+    await store.save(label=f"Bedienelement {control.name}")
+    _engine(hass).rebuild()
+    connection.send_result(msg["id"], {"ok": True, "verworfen": verworfen})
 
 
 # --------------------------------------------------------------------------

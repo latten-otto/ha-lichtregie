@@ -24,6 +24,7 @@ keine Fremdintegration wie Adaptive Lighting.
 | Entscheidungsprotokoll | fertig |
 | Engine: Bewegung, Bedienung, Fremdeingriff, Nachlauf, Dimmen | fertig |
 | Panel: Leitstand, Zone, Szenen-Editor, Bindungseditor, Tagesverlauf, Protokoll | fertig |
+| Raum einrichten je Zone: Melder, Helligkeitswert, Raumart, Lichtschalter | fertig, 8 Tests |
 | Zustandssicherung über Neustart | fertig, 3 Tests |
 | Betriebsstunden und Energieauswertung | offen |
 | Grundriss im Leitstand | offen |

@@ -178,6 +178,19 @@ select:focus,input:focus{outline:1px solid var(--amber);outline-offset:1px}
   color:var(--soft);background:var(--panel2)}
 .chipbtn.on{border-color:var(--amber);color:var(--amber);background:#221A0F}
 .chipbtn.haupt::after{content:" · Haupt";font-size:10px;opacity:.8}
+.raumkopf{display:flex;gap:10px;align-items:center;margin:2px 0 14px}
+.raumkopf .ent{font-family:ui-monospace,monospace;font-size:11px;color:var(--faint)}
+.raumbox{border:1px solid var(--line);border-radius:9px;background:var(--panel);
+  padding:16px 18px 6px;margin-bottom:16px}
+.raumgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(215px,1fr));gap:0 18px}
+.raumbox .feld{margin-bottom:15px}
+.raumbox .feld.weit{grid-column:1/-1}
+.raumbox select,.raumbox input[type=number]{width:100%}
+.raumbox .zeile input[type=number]{width:80px;text-align:right}
+.raumbox .unit{font-family:ui-monospace,monospace;font-size:11px;color:var(--faint)}
+.chipbtn .ent{font-family:ui-monospace,monospace;font-size:10px;color:var(--faint);margin-left:5px}
+.chipbtn.fremd{border-style:dashed}
+.chipbtn.fehlt{border-color:#4A2A26;color:var(--red)}
 .iconwahl{display:grid;grid-template-columns:repeat(auto-fill,minmax(76px,1fr));gap:6px}
 .iconbtn{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:6px;
   padding:9px 4px 7px;border-radius:9px;border:1px solid var(--line);background:var(--panel2);
@@ -416,6 +429,25 @@ const lampIcon = (typ, size = 17) =>
      stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
      stroke-linejoin="round" aria-hidden="true">${LAMP_ART[typ] || LAMP_ART.lampe}</svg>`;
 
+const RAUM_ART = {
+  wohnraum: "Wohnraum",
+  essraum: "Essraum",
+  schlafraum: "Schlafraum",
+  arbeitsraum: "Arbeitsraum",
+  kueche: "Küche",
+  nassbereich: "Bad · Nassbereich",
+  verkehrsweg: "Flur · Verkehrsweg",
+  nebenraum: "Nebenraum",
+  aussen: "Außen",
+};
+
+const LUX_GUETE = {
+  regelfaehig: "regelfähig",
+  momentaufnahme: "Momentaufnahme",
+  tot: "tot",
+  unbekannt: "noch nicht bewertet",
+};
+
 const ROLE_LABEL = {
   general: "Grund",
   task: "Arbeit",
@@ -458,6 +490,9 @@ class LichtregiePanel extends HTMLElement {
     this._dialog = null;
     this._freeLights = null;
     this._showOverrides = false;
+    this._raumOffen = false;
+    this._kandidaten = null;
+    this._kandidatenLaeuft = null;
     this._grenzeWerte = null;
     this._grenzeTimer = null;
     this._kontext = null;
@@ -1113,6 +1148,279 @@ class LichtregiePanel extends HTMLElement {
     </div>`;
   }
 
+  // -- Raum einrichten --------------------------------------------------------
+
+  // Melder, Helligkeitssensor, Raumart und Lichtschalter einer Zone. Steht
+  // über den Szenen, weil eine Szene ohne Auslöser nur ein gespeicherter
+  // Wunsch ist — hier entscheidet sich, wer sie überhaupt abruft.
+  _raumHtml(zone) {
+    if (!this._raumOffen) {
+      const melder = (zone.presence_entities || []).length;
+      const schalter = this.controls.filter((c) => c.zone_id === zone.id).length;
+      const teile = [
+        RAUM_ART[zone.kind] || zone.kind,
+        melder ? `${melder} Melder` : "kein Melder",
+        zone.lux_entity ? "Helligkeit gemessen" : "keine Helligkeitsmessung",
+        schalter ? `${schalter} Lichtschalter` : "kein Lichtschalter",
+      ];
+      return `<div class="raumkopf">
+        <button class="btn" data-act="raum-auf">Raum einrichten</button>
+        <span class="ent">${esc(teile.join(" · "))}</span>
+      </div>`;
+    }
+
+    const k =
+      this._kandidaten && this._kandidaten.zone === zone.id
+        ? this._kandidaten.daten
+        : null;
+    if (!k) {
+      this._kandidatenLaden(zone.id);
+      return `<div class="raumbox"><div class="empty">Geräte werden gesucht …</div></div>`;
+    }
+
+    // --- Raumart und Lichtverlauf ---------------------------------------
+    const arten = k.raumtypen
+      .map(
+        (t) =>
+          `<option value="${esc(t.key)}" ${t.key === zone.kind ? "selected" : ""}>
+             ${esc(RAUM_ART[t.key] || t.key)}</option>`
+      )
+      .join("");
+
+    const ausArt = (k.raumtypen.find((t) => t.key === zone.kind) || {}).kurve || "";
+    const ausArtName =
+      (k.kurven.find((c) => c.key === ausArt) || {}).name || ausArt || "—";
+    const kurven =
+      `<option value="" ${zone.curve_key ? "" : "selected"}>aus der Raumart (${esc(ausArtName)})</option>` +
+      k.kurven
+        .map(
+          (c) =>
+            `<option value="${esc(c.key)}" ${c.key === zone.curve_key ? "selected" : ""}>${esc(c.name)}</option>`
+        )
+        .join("");
+
+    // --- Bewegungsmelder -------------------------------------------------
+    const gewaehlteMelder = zone.presence_entities || [];
+    const bekannt = new Set(k.melder.map((m) => m.entity_id));
+    const fehlend = gewaehlteMelder.filter((e) => !bekannt.has(e));
+
+    const melderChips =
+      k.melder
+        .map((m) => {
+          const an = gewaehlteMelder.includes(m.entity_id);
+          const hinweis = m.belegt_in
+            ? `<span class="ent">auch in ${esc(m.belegt_in)}</span>`
+            : m.im_bereich
+            ? ""
+            : `<span class="ent">${esc(m.entity_id)}</span>`;
+          return `<button class="chipbtn ${an ? "on" : ""} ${m.im_bereich ? "" : "fremd"}"
+            data-melder="${esc(m.entity_id)}" title="${esc(m.entity_id)}">
+            ${esc(m.name)}${hinweis}</button>`;
+        })
+        .join("") +
+      fehlend
+        .map(
+          (e) =>
+            `<button class="chipbtn on fehlt" data-melder="${esc(e)}"
+               title="Diese Entität gibt es in Home Assistant nicht mehr">
+               ${esc(e)}<span class="ent">fehlt</span></button>`
+        )
+        .join("");
+
+    // Ein zugeordneter Melder allein schaltet noch nichts — er braucht eine
+    // Szene, die er aufruft. Ohne diesen Hinweis bliebe die Zone still und
+    // niemand wüsste, woran es liegt.
+    const bewegungsregeln = (zone.bindings || []).filter(
+      (b) => (b.trigger || {}).art === "bewegung"
+    );
+    const szenenName = (id) =>
+      ((zone.scenes || []).find((sc) => sc.id === id) || {}).name || "keine Szene";
+    const bewegungszeile = bewegungsregeln.length
+      ? `<p class="hint">Bewegung ruft auf:
+           ${bewegungsregeln
+             .map(
+               (b) =>
+                 `<b>${esc(szenenName(b.scene_id))}</b> (${Math.round(
+                   (b.hold_seconds || zone.linger) / 60
+                 )} min${
+                   (b.conditions || {}).nur_nachts === true
+                     ? ", nur nachts"
+                     : (b.conditions || {}).nur_nachts === false
+                     ? ", nur tags"
+                     : ""
+                 })`
+             )
+             .join(" · ")}
+           <button class="btn" data-act="to-steuerung"
+             style="padding:2px 8px;font-size:11px;margin-left:4px">ändern</button></p>`
+      : (zone.scenes || []).length
+      ? `<p class="hint"><b>Noch keine Szene für Bewegung hinterlegt</b> — der Melder
+           schaltet bisher nichts.
+           <button class="btn" data-act="motion-anlegen"
+             style="padding:2px 8px;font-size:11px;margin-left:4px">Szene für Bewegung wählen</button></p>`
+      : `<p class="hint"><b>Noch keine Szene in diesem Raum</b> — erst eine anlegen,
+           dann kann der Melder sie aufrufen.</p>`;
+
+    // --- Helligkeitssensor ----------------------------------------------
+    const luxWahl =
+      `<option value="" ${zone.lux_entity ? "" : "selected"}>keiner — nur nach Uhrzeit</option>` +
+      k.helligkeit
+        .map(
+          (h) =>
+            `<option value="${esc(h.entity_id)}" ${h.entity_id === zone.lux_entity ? "selected" : ""}>
+               ${esc(h.name)}${h.im_bereich ? "" : " (anderer Bereich)"}</option>`
+        )
+        .join("") +
+      (zone.lux_entity && !k.helligkeit.some((h) => h.entity_id === zone.lux_entity)
+        ? `<option value="${esc(zone.lux_entity)}" selected>${esc(zone.lux_entity)} — fehlt</option>`
+        : "");
+
+    const guete = LUX_GUETE[zone.lux_quality] || zone.lux_quality;
+    const gueteFarbe =
+      zone.lux_quality === "regelfaehig"
+        ? "ok"
+        : zone.lux_quality === "tot"
+        ? "alarm"
+        : "warn";
+
+    // --- Lichtschalter ---------------------------------------------------
+    const schalterChips = k.bedienelemente
+      .map((c) => {
+        const an = c.zone_id === zone.id;
+        const wo = an
+          ? `<span class="ent">${c.bindings} belegt</span>`
+          : c.zone_name
+          ? `<span class="ent">in ${esc(c.zone_name)}</span>`
+          : `<span class="ent">frei</span>`;
+        return `<button class="chipbtn ${an ? "on" : ""} ${c.im_bereich || an ? "" : "fremd"}"
+          data-bedien="${esc(c.id)}" title="${esc(c.model)} · ${c.buttons} Tasten">
+          ${esc(c.name)}${wo}</button>`;
+      })
+      .join("");
+
+    const zugeordnet = k.bedienelemente.filter((c) => c.zone_id === zone.id);
+    const unbelegt = zugeordnet.filter((c) => !c.bindings);
+
+    return `<div class="raumbox">
+      <div class="raumgrid">
+        <div class="feld">
+          <label>Was für ein Raum</label>
+          <select data-raum="kind">${arten}</select>
+          <p class="hint">Bestimmt die Richtwerte und die Voreinstellung des Verlaufs.</p>
+        </div>
+        <div class="feld">
+          <label>Helligkeits- und Farbverlauf</label>
+          <select data-raum="curve_key">${kurven}</select>
+          <p class="hint">Wie warm und wie hell das Licht über den Tag läuft.</p>
+        </div>
+        <div class="feld">
+          <label>Nachlauf nach der letzten Bewegung</label>
+          <div class="zeile">
+            <input type="number" min="1" max="240" value="${Math.round(zone.linger / 60)}"
+              data-raum="linger">
+            <span class="unit">min</span>
+          </div>
+          <p class="hint">Richtwert der Raumart:
+            ${Math.round(((k.raumtypen.find((t) => t.key === zone.kind) || {}).richtwerte || {}).linger / 60 || 0)} min.
+            <button class="btn" data-act="kind-defaults"
+              style="padding:2px 8px;font-size:11px;margin-left:4px">Richtwerte übernehmen</button>
+          </p>
+        </div>
+
+        <div class="feld weit">
+          <label>Welcher Melder meldet Bewegung</label>
+          ${
+            melderChips
+              ? `<div class="chips">${melderChips}</div>`
+              : `<div class="empty" style="padding:14px 0">Home Assistant kennt keinen Bewegungs-
+                   oder Anwesenheitsmelder.</div>`
+          }
+          <p class="hint">Mehrere sind erlaubt — jeder von ihnen weckt die Zone.
+            Gestrichelt umrandete liegen in einem anderen Bereich.</p>
+          ${gewaehlteMelder.length ? bewegungszeile : ""}
+        </div>
+
+        <div class="feld weit">
+          <label>Woher der Helligkeitswert kommt</label>
+          <div class="zeile">
+            <select data-raum="lux_entity">${luxWahl}</select>
+            ${zone.lux_entity ? `<span class="chip ${gueteFarbe}">${esc(guete)}</span>` : ""}
+          </div>
+          <p class="hint">${
+            zone.lux_entity
+              ? zone.lux_quality === "regelfaehig"
+                ? "Taugt zum Regeln — die Zone kann auf einen Sollwert in Lux fahren."
+                : "Reicht nur zum Unterscheiden von hell und dunkel, nicht zum Regeln."
+              : "Ohne Messwert entscheidet allein der Tagesverlauf, wie hell es wird."
+          }</p>
+        </div>
+
+        <div class="feld weit">
+          <label>Welcher Lichtschalter steuert diesen Raum</label>
+          ${
+            schalterChips
+              ? `<div class="chips">${schalterChips}</div>`
+              : `<div class="empty" style="padding:14px 0">Noch keine Bedienelemente eingelesen.</div>`
+          }
+          <p class="hint">Ein Klick ordnet zu oder nimmt heraus. Beim Wechsel in eine
+            andere Zone fallen die Szenenbelegungen weg — die Szenen gibt es dort nicht.
+            ${
+              unbelegt.length
+                ? `<br><b>${unbelegt.length} zugeordnete${unbelegt.length === 1 ? "r" : ""} Schalter
+                     ${unbelegt.length === 1 ? "hat" : "haben"} noch keine Tastenbelegung.</b>`
+                : ""
+            }</p>
+          ${
+            zugeordnet.length
+              ? `<div class="row" style="margin-top:4px">
+                   <button class="btn" data-act="to-steuerung">Tasten belegen …</button>
+                 </div>`
+              : ""
+          }
+        </div>
+      </div>
+      <div class="row" style="margin-top:2px;margin-bottom:12px">
+        <button class="btn" data-act="raum-zu">Einrichtung schließen</button>
+        ${this._busy ? `<span class="chip warn">${esc(this._busy)}</span>` : ""}
+      </div>
+    </div>`;
+  }
+
+  async _kandidatenLaden(zoneId) {
+    // Ohne Sperre stößt jeder Renderdurchlauf eine weitere Abfrage an.
+    if (this._kandidatenLaeuft === zoneId) return;
+    this._kandidatenLaeuft = zoneId;
+    try {
+      const daten = await this._call("lichtregie/zone/candidates", { zone_id: zoneId });
+      this._kandidaten = { zone: zoneId, daten };
+    } catch (err) {
+      this._busy = "Geräte lassen sich nicht lesen.";
+    } finally {
+      this._kandidatenLaeuft = null;
+    }
+    this._render();
+  }
+
+  async _raumSpeichern(feld, wert) {
+    const zone = this.zoneConfig(this._zoneId);
+    if (!zone) return;
+    const nachricht = { zone_id: zone.id };
+    if (feld === "linger") nachricht.linger = Math.max(1, Number(wert)) * 60;
+    else if (feld === "lux_entity") nachricht.lux_entity = wert || null;
+    else nachricht[feld] = wert;
+    const antwort = await this._call("lichtregie/zone/settings", nachricht);
+    if (antwort && antwort.zone) this._zoneUebernehmen(antwort.zone);
+    this._busy = "";
+    this._render();
+  }
+
+  // Die Antwort trägt die fertige Zone — damit muss die ganze Anlage nicht
+  // erneut über die Leitung.
+  _zoneUebernehmen(daten) {
+    const index = this.zones.findIndex((z) => z.id === daten.id);
+    if (index >= 0) this._config.zones[index] = daten;
+  }
+
   // -- Szenen ---------------------------------------------------------------
 
   _scenesHtml() {
@@ -1162,6 +1470,7 @@ class LichtregiePanel extends HTMLElement {
         <p class="sub">Eine Szene wird in Ebenen eingestellt: Deckenlicht, Arbeitslicht,
           Stimmung. Einzelne Leuchten können davon abweichen.</p>
         ${this._zonePicker()}
+        ${this._raumHtml(zone)}
         <div class="slist">${scenes || `<div class="empty">Noch keine Szenen.</div>`}</div>
         <div class="row">
           <button class="btn pri" data-act="suggest">Szenen vorschlagen</button>
@@ -1219,6 +1528,7 @@ class LichtregiePanel extends HTMLElement {
     return `<h2>Szenen</h2>
       <p class="sub">Eine Szene wird in Ebenen eingestellt. Einzelne Leuchten können abweichen.</p>
       ${this._zonePicker()}
+      ${this._raumHtml(zone)}
       <div class="slist">${scenes}</div>
 
       <div class="sec">„${esc(editing.name)}“ — Ebenen</div>
@@ -1796,6 +2106,7 @@ class LichtregiePanel extends HTMLElement {
         "[data-edit],[data-delscene],[data-lampflag],[data-delmo],[data-delta]," +
         "[data-lampdlg],[data-close],[data-stop],[data-dlgicon],[data-dlgrole],[data-ausweg]," +
         "[data-kontextzu],[data-uebernehmen],[data-kontextweg]," +
+        "[data-melder],[data-bedien]," +
         "[data-dlgflag],[data-dlgenabled],[data-dlgdelete],[data-addlight]"
     );
     if (!target) return;
@@ -2074,6 +2385,49 @@ class LichtregiePanel extends HTMLElement {
       this._dirty = false;
       this._draft = {};
       this._busy = "";
+      // Die Kandidatenliste ist nach Bereich der alten Zone sortiert und
+      // markiert deren Zuordnungen — für die neue wäre sie irreführend.
+      this._kandidaten = null;
+      return this._render();
+    }
+
+    // --- Raum einrichten -------------------------------------------------
+    if (target.dataset.melder) {
+      const zone = this.zoneConfig(this._zoneId);
+      const entity = target.dataset.melder;
+      const melder = zone.presence_entities || [];
+      const neu = melder.includes(entity)
+        ? melder.filter((e) => e !== entity)
+        : [...melder, entity];
+      return this._raumSpeichern("presence_entities", neu);
+    }
+    if (target.dataset.bedien) {
+      const zone = this.zoneConfig(this._zoneId);
+      const control = this.controls.find((c) => c.id === target.dataset.bedien);
+      if (!control) return;
+      const raus = control.zone_id === zone.id;
+      const belegt = (control.bindings || []).filter((b) => b.action === "scene").length;
+      if (
+        belegt &&
+        !confirm(
+          `„${control.name}" hat ${belegt} Szenenbelegung(en) in ` +
+            `${raus ? zone.name : "einer anderen Zone"}. ` +
+            `Beim Wechsel fallen sie weg. Fortfahren?`
+        )
+      ) {
+        return;
+      }
+      const antwort = await this._call("lichtregie/control/zone", {
+        control_id: control.id,
+        zone_id: raus ? null : zone.id,
+      });
+      this._config = await this._call("lichtregie/config/get");
+      this._kandidaten = null;
+      this._busy = raus
+        ? `„${control.name}" ist keiner Zone mehr zugeordnet.`
+        : antwort.verworfen
+        ? `„${control.name}" gehört jetzt zu ${zone.name} — ${antwort.verworfen} Belegung(en) verworfen.`
+        : `„${control.name}" gehört jetzt zu ${zone.name}. Jetzt die Tasten belegen.`;
       return this._render();
     }
     if (target.dataset.scene) {
@@ -2188,6 +2542,53 @@ class LichtregiePanel extends HTMLElement {
       case "to-scenes":
         this._view = "szenen";
         return this._render();
+      case "raum-auf":
+        this._raumOffen = true;
+        this._busy = "";
+        return this._render();
+      case "raum-zu":
+        this._raumOffen = false;
+        this._busy = "";
+        return this._render();
+      case "to-steuerung": {
+        const meine = this.controls.filter((c) => c.zone_id === this._zoneId);
+        this._controlId = (meine.find((c) => c.buttons >= 2) || meine[0] || {}).id || null;
+        this._view = "steuerung";
+        this._busy = "";
+        return this._render();
+      }
+      case "motion-anlegen": {
+        const zone = this.zoneConfig(this._zoneId);
+        if (!(zone.scenes || []).length) return;
+        await this._call("lichtregie/binding/set", {
+          zone_id: this._zoneId,
+          binding: {
+            id: `m${Date.now().toString(36)}`,
+            trigger: { art: "bewegung" },
+            action: "scene",
+            scene_id: zone.scenes[0].id,
+            layer: 40,
+            hold: "solange_belegt",
+            hold_seconds: zone.linger,
+            conditions: {},
+          },
+        });
+        this._config = await this._call("lichtregie/config/get");
+        // Angelegt ist sie mit der ersten Szene — welche es sein soll,
+        // entscheidet sich in der Steuerung.
+        this._view = "steuerung";
+        this._busy = "Bewegungsregel angelegt — jetzt die Szene wählen.";
+        return this._render();
+      }
+      case "kind-defaults": {
+        const antwort = await this._call("lichtregie/zone/settings", {
+          zone_id: this._zoneId,
+          kind_defaults: true,
+        });
+        if (antwort && antwort.zone) this._zoneUebernehmen(antwort.zone);
+        this._busy = "Richtwerte der Raumart übernommen.";
+        return this._render();
+      }
       case "add-motion": {
         const zone = this.zoneConfig(this._zoneId);
         await this._call("lichtregie/binding/set", {
@@ -2540,6 +2941,13 @@ class LichtregiePanel extends HTMLElement {
       });
       this._config = await this._call("lichtregie/config/get");
       return this._render();
+    }
+
+    const raum = ev.target.closest("[data-raum]");
+    if (raum) {
+      // Beim Wechsel der Raumart soll der Verlauf wieder ihr folgen dürfen;
+      // eine ausdrücklich gewählte Kurve bleibt aber stehen.
+      return this._raumSpeichern(raum.dataset.raum, raum.value);
     }
 
     const lamp = ev.target.closest("[data-lamp],[data-lampnum]");
